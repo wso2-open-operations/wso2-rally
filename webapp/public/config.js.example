@@ -1,0 +1,84 @@
+/**
+ * config.js — Runtime configuration for the WSO2 Motor Rally organizer portal
+ * ─────────────────────────────────────────────────────────────────────────────
+ * The browser loads this file before the React bundle, so every value is read
+ * once at page load and never changes during a session.
+ *
+ * HOW IT WORKS
+ *   1. Copy this file to  public/config.js  (config.js is gitignored).
+ *   2. Fill in the required values for your environment.
+ *   3. Optional fields can be omitted — the app falls back to safe defaults.
+ *   4. Restart the dev server (or redeploy) after changing values.
+ *
+ * The same built  dist/  is promoted across environments; only this file
+ * changes between them.
+ *
+ * REQUIRED vs OPTIONAL
+ *   Fields without a default shown below are REQUIRED — the app throws on
+ *   startup rather than guessing.
+ * ─────────────────────────────────────────────────────────────────────────────
+ */
+window.config = {
+  // ── Backend API ───────────────────────────────────────────────────────────
+  //
+  // RALLY_BACKEND_BASE_URL
+  //   Base URL of the rally backend (REST API). No trailing slash.
+  //   Local development : "http://localhost:8080"
+  //   Choreo            : "https://<host>/<project>/rally-backend/v1.0"
+  //   The WebSocket URL is derived from this (http→ws, https→wss, + "/ws"),
+  //   so there is nothing extra to configure for the live views.
+  RALLY_BACKEND_BASE_URL: "http://localhost:8080",
+
+  // ── Authentication (Asgardeo / WSO2 Identity Server) ──────────────────────
+  //
+  // RALLY_ASGARDEO_BASE_URL
+  //   Base URL of the Asgardeo organisation or Identity Server tenant.
+  //   Asgardeo format  : "https://api.asgardeo.io/t/<your-org-name>"
+  //   On-prem IS format: "https://<your-is-host>/t/<your-tenant>"
+  RALLY_ASGARDEO_BASE_URL: "https://api.asgardeo.io/t/<your-tenant>",
+
+  // RALLY_ASGARDEO_CLIENT_ID
+  //   OAuth 2.0 client ID of the SPA registered for this portal.
+  RALLY_ASGARDEO_CLIENT_ID: "<your-client-id>",
+
+  // RALLY_ASGARDEO_SIGN_IN_REDIRECT_URL
+  //   Where the identity provider returns after a successful login. Must match
+  //   one of the application's Allowed Callback URLs exactly.
+  RALLY_ASGARDEO_SIGN_IN_REDIRECT_URL: "http://localhost:3000",
+
+  // RALLY_ASGARDEO_SIGN_OUT_REDIRECT_URL
+  //   Where the identity provider returns after logout. Must match one of the
+  //   application's Allowed Logout URLs exactly. Usually the same as above.
+  RALLY_ASGARDEO_SIGN_OUT_REDIRECT_URL: "http://localhost:3000",
+
+  // ── Maps ──────────────────────────────────────────────────────────────────
+  //
+  // All map keys are OPTIONAL. The defaults use OpenStreetMap tiles, which
+  // need no API key, centred on Colombo. Override these only when serving
+  // tiles from your own proxy or running the rally elsewhere.
+  //
+  // RALLY_MAP_TILE_URL       (default: OpenStreetMap standard tiles)
+  // RALLY_MAP_ATTRIBUTION    (default: the OpenStreetMap attribution)
+  // RALLY_MAP_DEFAULT_LAT    (default: 6.9271)
+  // RALLY_MAP_DEFAULT_LNG    (default: 79.8612)
+  // RALLY_MAP_DEFAULT_ZOOM   (default: 11)
+  //
+  // RALLY_MAP_TILE_URL: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+  // RALLY_MAP_DEFAULT_LAT: 6.9271,
+  // RALLY_MAP_DEFAULT_LNG: 79.8612,
+  // RALLY_MAP_DEFAULT_ZOOM: 11,
+
+  // ── UI theme ──────────────────────────────────────────────────────────────
+  //
+  // RALLY_THEME  (optional — default: "acrylicOrange")
+  //   Oxygen UI colour theme.
+  //   Allowed values: "acrylicOrange" | "acrylicPurple" | "highContrast" | "classic"
+  RALLY_THEME: "acrylicOrange",
+
+  // ── Logging ───────────────────────────────────────────────────────────────
+  //
+  // RALLY_LOG_LEVEL  (optional — default: "ERROR")
+  //   Minimum severity written to the browser console.
+  //   Allowed values (least → most verbose): "ERROR" | "WARN" | "INFO" | "DEBUG"
+  RALLY_LOG_LEVEL: "ERROR",
+};

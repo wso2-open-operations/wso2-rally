@@ -201,6 +201,55 @@ func TestHandler_Search_EmptyResultIsAnArray(t *testing.T) {
 	require.JSONEq(t, `{"items":[],"totalCount":0}`, rr.Body.String())
 }
 
+func TestHandler_Stats(t *testing.T) {
+	h, repo := newTestHandler(t)
+	created := createEvent(t, h)
+	repo.stats[created.ID] = Stats{Vehicles: 150, Crews: 600, Tasks: 15, OpenAlerts: 3}
+
+	rr := do(t, h, http.MethodGet, "/events/"+created.ID+"/stats", "")
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.JSONEq(t, `{"vehicles":150,"crews":600,"tasks":15,"openAlerts":3}`, rr.Body.String())
+}
+
+func TestHandler_Stats_Unknown404(t *testing.T) {
+	h, _ := newTestHandler(t)
+
+	rr := do(t, h, http.MethodGet, "/events/does-not-exist/stats", "")
+
+	require.Equal(t, http.StatusNotFound, rr.Code)
+	require.NotEmpty(t, messageOf(t, rr))
+}
+
+// The A1 dashboard prints the routes an event runs on in its table, so the
+// event payload has to carry them rather than forcing a call per row.
+func TestHandler_Get_CarriesRouteRefs(t *testing.T) {
+	h, repo := newTestHandler(t)
+	created := createEvent(t, h)
+	stored := repo.events[created.ID]
+	stored.Routes = []RouteRef{{ID: "r1", Name: "Inland"}, {ID: "r2", Name: "Wetlands"}}
+	repo.events[created.ID] = stored
+
+	rr := do(t, h, http.MethodGet, "/events/"+created.ID, "")
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	var got EventDTO
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &got))
+	require.Equal(t, []RouteRefDTO{{ID: "r1", Name: "Inland"}, {ID: "r2", Name: "Wetlands"}}, got.Routes)
+}
+
+// A routeless event must serialise as [] so the web app can map over it
+// without a null check.
+func TestHandler_Get_RouteRefsAreNeverNull(t *testing.T) {
+	h, _ := newTestHandler(t)
+	created := createEvent(t, h)
+
+	rr := do(t, h, http.MethodGet, "/events/"+created.ID, "")
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Contains(t, rr.Body.String(), `"routes":[]`)
+}
+
 func createEvent(t *testing.T, h http.Handler) EventDTO {
 	t.Helper()
 

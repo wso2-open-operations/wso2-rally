@@ -17,8 +17,8 @@
 //go:build integration
 
 // This integration test walks the whole rally against a real MySQL:
-// an organizer sets an event up, a crew binds a phone, drives into a geofence,
-// answers a task, and appears on the leaderboard.
+// an organizer sets an event up, a crew joins their phones, drives into a
+// geofence, answers a task, and appears on the leaderboard.
 //
 // Run it with a database:
 //
@@ -215,29 +215,56 @@ func TestHappyPath(t *testing.T) {
 		"vehicleType": "SUV",
 		"contactNumber": "+94771234567",
 		"routeId": "`+route.ID+`",
-		"crew": [{"name":"Nimal","role":"navigator"},{"name":"Sunil","role":"node"}]
+		"crew": [
+			{"name":"Nimal","phoneNumber":"0771234567","role":"navigator"},
+			{"name":"Sunil","phoneNumber":"0777654321","role":"node"}
+		]
 	}`), http.StatusCreated)
 	require.Len(t, vehicle.Crew, 2)
 
-	// --- A crew binds one phone. ---
+	// --- The first crew member joins, which creates the car's run. ---
 
-	bound := decode[struct {
+	joined := decode[struct {
 		TeamToken string `json:"teamToken"`
 		Session   struct {
 			ID     string `json:"id"`
 			Status string `json:"status"`
 		} `json:"session"`
-	}](t, r.do(http.MethodPost, "/sessions/bind",
-		`{"vehicleId":"`+vehicle.ID+`","crewMemberIds":["`+vehicle.Crew[0].ID+`"]}`, ""),
+		Crew []struct {
+			CrewMemberID string `json:"crewMemberId"`
+		} `json:"crew"`
+	}](t, r.do(http.MethodPost, "/sessions/join",
+		`{"vehicleId":"`+vehicle.ID+`","crewMemberId":"`+vehicle.Crew[0].ID+`","phoneLast4":"4567"}`, ""),
 		http.StatusCreated)
-	require.NotEmpty(t, bound.TeamToken)
-	require.Equal(t, "bound", bound.Session.Status)
-	r.teamToken = bound.TeamToken
+	require.NotEmpty(t, joined.TeamToken)
+	require.Equal(t, "bound", joined.Session.Status)
+	require.Len(t, joined.Crew, 1)
+	r.teamToken = joined.TeamToken
 
-	// The one-active-phone rule: a second device is turned away.
-	second := r.do(http.MethodPost, "/sessions/bind",
-		`{"vehicleId":"`+vehicle.ID+`","crewMemberIds":["`+vehicle.Crew[0].ID+`"]}`, "")
-	require.Equal(t, http.StatusConflict, second.Code, "body: %s", second.Body.String())
+	// A teammate's phone joins the SAME run rather than being turned away —
+	// this is what keeps a crew from being split across two sessions.
+	teammate := decode[struct {
+		TeamToken string `json:"teamToken"`
+		Session   struct {
+			ID string `json:"id"`
+		} `json:"session"`
+		Crew []struct {
+			CrewMemberID string `json:"crewMemberId"`
+		} `json:"crew"`
+	}](t, r.do(http.MethodPost, "/sessions/join",
+		`{"vehicleId":"`+vehicle.ID+`","crewMemberId":"`+vehicle.Crew[1].ID+`","phoneLast4":"4321"}`, ""),
+		http.StatusCreated)
+	require.Equal(t, joined.Session.ID, teammate.Session.ID, "both phones share one run")
+	require.Len(t, teammate.Crew, 2, "the second phone sees both members aboard")
+
+	// The last four digits are the whole of participant authentication, so a
+	// wrong code must not mint a token. It is a 403, and the body is the
+	// generic forbidden message — a probing client learns nothing about
+	// whether the vehicle, the member or the digits were wrong.
+	wrongCode := r.do(http.MethodPost, "/sessions/join",
+		`{"vehicleId":"`+vehicle.ID+`","crewMemberId":"`+vehicle.Crew[0].ID+`","phoneLast4":"0000"}`, "")
+	require.Equal(t, http.StatusForbidden, wrongCode.Code, "body: %s", wrongCode.Body.String())
+	require.NotContains(t, wrongCode.Body.String(), "roster")
 
 	// --- The crew drives into the waypoint and the task unlocks. ---
 
@@ -344,14 +371,15 @@ func TestCrewCannotUseOrganizerEndpoints(t *testing.T) {
 			ID string `json:"id"`
 		} `json:"crew"`
 	}](t, r.asOrganizer(http.MethodPost, "/events/"+event.ID+"/vehicles",
-		`{"code":"PKT-001","teamName":"Team","crew":[{"name":"Nimal"}]}`), http.StatusCreated)
-
-	bound := decode[struct {
-		TeamToken string `json:"teamToken"`
-	}](t, r.do(http.MethodPost, "/sessions/bind",
-		`{"vehicleId":"`+vehicle.ID+`","crewMemberIds":["`+vehicle.Crew[0].ID+`"]}`, ""),
+		`{"code":"PKT-001","teamName":"Team","crew":[{"name":"Nimal","phoneNumber":"0771234567"}]}`),
 		http.StatusCreated)
-	r.teamToken = bound.TeamToken
+
+	joined := decode[struct {
+		TeamToken string `json:"teamToken"`
+	}](t, r.do(http.MethodPost, "/sessions/join",
+		`{"vehicleId":"`+vehicle.ID+`","crewMemberId":"`+vehicle.Crew[0].ID+`","phoneLast4":"4567"}`, ""),
+		http.StatusCreated)
+	r.teamToken = joined.TeamToken
 
 	for _, path := range []string{
 		"/events/" + event.ID + "/leaderboard",
@@ -366,8 +394,8 @@ func TestCrewCannotUseOrganizerEndpoints(t *testing.T) {
 	}
 }
 
-// Crews cannot bind to an event the organizer has not published.
-func TestBindBeforePublishIsRejected(t *testing.T) {
+// Crews cannot join an event the organizer has not published.
+func TestJoinBeforePublishIsRejected(t *testing.T) {
 	r := newRally(t)
 
 	event := decode[idResponse](t, r.asOrganizer(http.MethodPost, "/events", `{
@@ -382,10 +410,11 @@ func TestBindBeforePublishIsRejected(t *testing.T) {
 			ID string `json:"id"`
 		} `json:"crew"`
 	}](t, r.asOrganizer(http.MethodPost, "/events/"+event.ID+"/vehicles",
-		`{"code":"PKT-001","teamName":"Team","crew":[{"name":"Nimal"}]}`), http.StatusCreated)
+		`{"code":"PKT-001","teamName":"Team","crew":[{"name":"Nimal","phoneNumber":"0771234567"}]}`),
+		http.StatusCreated)
 
-	rec := r.do(http.MethodPost, "/sessions/bind",
-		`{"vehicleId":"`+vehicle.ID+`","crewMemberIds":["`+vehicle.Crew[0].ID+`"]}`, "")
+	rec := r.do(http.MethodPost, "/sessions/join",
+		`{"vehicleId":"`+vehicle.ID+`","crewMemberId":"`+vehicle.Crew[0].ID+`","phoneLast4":"4567"}`, "")
 
 	require.Equal(t, http.StatusConflict, rec.Code, "body: %s", rec.Body.String())
 }
@@ -401,9 +430,11 @@ func TestVehicleCSVRoundTrip(t *testing.T) {
 	}`), http.StatusCreated)
 	r.asOrganizer(http.MethodPost, "/events/"+event.ID+"/routes", `{"name":"Inland"}`)
 
+	// Crew entries are "Name:phone": the number is mandatory because its last
+	// four digits are how that member joins their car.
 	body, contentType := csvUpload(t, "code,team_name,vehicle_type,contact_number,route_name,crew_names\n"+
-		"PKT-001,Packet Pioneers,SUV,+94771234567,Inland,Nimal|Sunil\n"+
-		"PKT-002,Byte Brigade,Van,+94777654321,Inland,Kamala\n")
+		"PKT-001,Packet Pioneers,SUV,+94771234567,Inland,Nimal:0771234567|Sunil:0777654321\n"+
+		"PKT-002,Byte Brigade,Van,+94777654321,Inland,Kamala:0779876543\n")
 
 	req := httptest.NewRequest(http.MethodPost, "/events/"+event.ID+"/vehicles/import", body)
 	req.Header.Set("Authorization", "Bearer "+r.organizer)
@@ -418,7 +449,8 @@ func TestVehicleCSVRoundTrip(t *testing.T) {
 
 	exported := r.asOrganizer(http.MethodGet, "/events/"+event.ID+"/vehicles/export", "")
 	require.Equal(t, http.StatusOK, exported.Code)
-	require.Contains(t, exported.Body.String(), "PKT-001,Packet Pioneers,SUV,+94771234567,Inland,Nimal|Sunil")
+	require.Contains(t, exported.Body.String(),
+		"PKT-001,Packet Pioneers,SUV,+94771234567,Inland,Nimal:0771234567|Sunil:0777654321")
 }
 
 // csvUpload builds the multipart body the web app's import control sends.

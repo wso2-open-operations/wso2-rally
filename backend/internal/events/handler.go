@@ -48,6 +48,7 @@ func (h *Handler) Register(r chi.Router) {
 	r.Post("/events/search", h.search)
 	r.Get("/events/{eventId}", h.get)
 	r.Patch("/events/{eventId}", h.update)
+	r.Get("/events/{eventId}/stats", h.stats)
 	r.Post("/events/{eventId}/publish", h.publish)
 }
 
@@ -127,6 +128,18 @@ func (h *Handler) search(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httpx.WriteJSON(w, http.StatusOK, httpx.NewSearchResult(toDTOs(found), total))
+}
+
+// stats backs the dashboard cards: fleet size, crew headcount, task count and
+// the open-alert badge.
+func (h *Handler) stats(w http.ResponseWriter, r *http.Request) {
+	stats, err := h.service.Stats(r.Context(), chi.URLParam(r, "eventId"))
+	if err != nil {
+		httpx.WriteDomainError(w, r, h.logger, err)
+		return
+	}
+
+	httpx.WriteJSON(w, http.StatusOK, toStatsDTO(stats))
 }
 
 func (h *Handler) publish(w http.ResponseWriter, r *http.Request) {

@@ -37,6 +37,8 @@ type Repo interface {
 	Get(ctx context.Context, id string) (Event, error)
 	Update(ctx context.Context, e Event) error
 	Search(ctx context.Context, page httpx.Page, filter SearchFilter) ([]Event, int, error)
+	// Stats counts the event's fleet, crews, tasks and unresolved alerts.
+	Stats(ctx context.Context, eventID string) (Stats, error)
 }
 
 // Service holds the event rules.
@@ -130,6 +132,23 @@ func (s *Service) Search(ctx context.Context, page httpx.Page, filter SearchFilt
 	}
 
 	return found, total, nil
+}
+
+// Stats returns the dashboard counts for one event.
+//
+// The event is read first so an unknown id is a 404 rather than a row of
+// zeroes, which would read as a provisioned-but-empty rally.
+func (s *Service) Stats(ctx context.Context, id string) (Stats, error) {
+	if _, err := s.repo.Get(ctx, id); err != nil {
+		return Stats{}, err
+	}
+
+	stats, err := s.repo.Stats(ctx, id)
+	if err != nil {
+		return Stats{}, fmt.Errorf("stats of event %s: %w", id, err)
+	}
+
+	return stats, nil
 }
 
 // Publish moves an event from setup to active, opening it to crews.

@@ -162,6 +162,23 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /events/{eventId}/stats:
+    parameters:
+      - $ref: "#/components/parameters/EventId"
+    get:
+      tags: [Events]
+      summary: Headline counts for the events dashboard.
+      description: |
+        Fleet size, crew headcount, task count and unresolved alerts for one
+        event. Backs the cards on the organizer's events dashboard (A1).
+      responses:
+        "200":
+          description: The counts.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EventStats" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /events/{eventId}/publish:
     parameters:
       - $ref: "#/components/parameters/EventId"
@@ -1094,6 +1111,33 @@ components:
         cipher: { type: string }
         createdBy: { type: string }
         createdOn: { type: string, format: date-time }
+        routes:
+          type: array
+          description: |
+            The event's routes, name only, so a list of events can be rendered
+            without a call per row. Read-only — routes are written through the
+            routes endpoints. Always an array, never null.
+          items: { $ref: "#/components/schemas/RouteRef" }
+
+    RouteRef:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string, example: "Inland" }
+
+    EventStats:
+      type: object
+      properties:
+        vehicles: { type: integer, example: 150 }
+        crews:
+          type: integer
+          description: Crew members across the event's whole fleet.
+          example: 600
+        tasks: { type: integer, example: 15 }
+        openAlerts:
+          type: integer
+          description: Unresolved vehicle alerts across the event's fleet.
+          example: 3
 
     CreateEventRequest:
       type: object

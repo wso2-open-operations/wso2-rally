@@ -76,6 +76,13 @@ type Boundary struct {
 // IsPlaced reports whether the boundary has coordinates and can be evaluated.
 func (b Boundary) IsPlaced() bool { return b.Lat != nil && b.Lng != nil }
 
+// RouteRef names one of an event's routes. It is the smallest projection the
+// events dashboard needs — the routes domain owns the full shape.
+type RouteRef struct {
+	ID   string
+	Name string
+}
+
 // Event is the domain model. Times are typed; the wire shape lives in dto.go.
 type Event struct {
 	ID        string
@@ -91,6 +98,19 @@ type Event struct {
 	Cipher    string
 	CreatedBy string
 	CreatedOn time.Time
+	// Routes is a read-only projection filled by Get and Search so the events
+	// table can print "Inland + Wetlands" without a call per row. Create and
+	// Update ignore it; routes are written through the routes domain.
+	Routes []RouteRef
+}
+
+// Stats are the headline counts behind the events dashboard cards.
+type Stats struct {
+	Vehicles int
+	Crews    int
+	Tasks    int
+	// OpenAlerts counts unresolved alerts across the event's whole fleet.
+	OpenAlerts int
 }
 
 // CreateEventInput is a validated create request.

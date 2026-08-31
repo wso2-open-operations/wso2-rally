@@ -1,0 +1,71 @@
+// Copyright (c) 2026 WSO2 LLC. (https://www.wso2.com).
+//
+// WSO2 LLC. licenses this file to you under the Apache License,
+// Version 2.0 (the "License"); you may not use this file except
+// in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+import { fileURLToPath, URL } from "node:url";
+import { defineConfig, mergeConfig } from "vite";
+import { defineConfig as defineVitestConfig } from "vitest/config";
+import react from "@vitejs/plugin-react";
+
+const viteConfig = defineConfig({
+  plugins: [
+    react({
+      babel: {
+        plugins: [["babel-plugin-react-compiler"]],
+      },
+    }),
+  ],
+  resolve: {
+    alias: {
+      "@": fileURLToPath(new URL("./src", import.meta.url)),
+      "@api": fileURLToPath(new URL("./src/api", import.meta.url)),
+      "@components": fileURLToPath(
+        new URL("./src/components", import.meta.url),
+      ),
+      "@config": fileURLToPath(new URL("./src/config", import.meta.url)),
+      "@constants": fileURLToPath(new URL("./src/constants", import.meta.url)),
+      "@context": fileURLToPath(new URL("./src/context", import.meta.url)),
+      "@features": fileURLToPath(new URL("./src/features", import.meta.url)),
+      "@hooks": fileURLToPath(new URL("./src/hooks", import.meta.url)),
+      "@layouts": fileURLToPath(new URL("./src/layouts", import.meta.url)),
+      "@utils": fileURLToPath(new URL("./src/utils", import.meta.url)),
+    },
+  },
+  envPrefix: ["RALLY_"],
+  server: {
+    port: 3000,
+  },
+});
+
+const vitestConfig = defineVitestConfig({
+  test: {
+    globals: true,
+    environment: "jsdom",
+    setupFiles: ["./src/vitest.setup.ts"],
+    css: true,
+    server: {
+      deps: {
+        inline: [
+          "@wso2/oxygen-ui",
+          "@wso2/oxygen-ui-icons-react",
+          "@mui/x-data-grid",
+          "@asgardeo/browser",
+        ],
+      },
+    },
+  },
+});
+
+export default mergeConfig(viteConfig, vitestConfig);

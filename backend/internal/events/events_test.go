@@ -33,10 +33,14 @@ import (
 // the SQL implementation is covered by the DB-backed repo tests.
 type fakeRepo struct {
 	events    map[string]Event
+	stats     map[string]Stats
 	createErr error
+	statsErr  error
 }
 
-func newFakeRepo() *fakeRepo { return &fakeRepo{events: map[string]Event{}} }
+func newFakeRepo() *fakeRepo {
+	return &fakeRepo{events: map[string]Event{}, stats: map[string]Stats{}}
+}
 
 func (f *fakeRepo) Create(_ context.Context, e Event) error {
 	if f.createErr != nil {
@@ -76,6 +80,13 @@ func (f *fakeRepo) Search(_ context.Context, page httpx.Page, filter SearchFilte
 	end := min(page.Offset+page.Limit, total)
 
 	return matched[page.Offset:end], total, nil
+}
+
+func (f *fakeRepo) Stats(_ context.Context, eventID string) (Stats, error) {
+	if f.statsErr != nil {
+		return Stats{}, f.statsErr
+	}
+	return f.stats[eventID], nil
 }
 
 func validInput() CreateEventInput {
@@ -237,6 +248,40 @@ func TestService_Search_RejectsUnknownStatus(t *testing.T) {
 	_, _, err := NewService(newFakeRepo()).Search(context.Background(), httpx.Page{Limit: 10}, SearchFilter{Status: "nope"})
 
 	require.ErrorIs(t, err, ErrValidation)
+}
+
+func TestService_Stats_ReturnsCountsForKnownEvent(t *testing.T) {
+	repo := newFakeRepo()
+	svc := NewService(repo)
+	ctx := context.Background()
+	created, err := svc.Create(ctx, validInput())
+	require.NoError(t, err)
+	repo.stats[created.ID] = Stats{Vehicles: 150, Crews: 600, Tasks: 15, OpenAlerts: 3}
+
+	got, err := svc.Stats(ctx, created.ID)
+
+	require.NoError(t, err)
+	require.Equal(t, Stats{Vehicles: 150, Crews: 600, Tasks: 15, OpenAlerts: 3}, got)
+}
+
+// The dashboard must not report zeroes for an event that does not exist —
+// that would read as "provisioned but empty" rather than "wrong id".
+func TestService_Stats_UnknownIsNotFound(t *testing.T) {
+	_, err := NewService(newFakeRepo()).Stats(context.Background(), "missing")
+
+	require.ErrorIs(t, err, ErrNotFound)
+}
+
+func TestService_Stats_PropagatesRepoFailure(t *testing.T) {
+	repo := newFakeRepo()
+	svc := NewService(repo)
+	created, err := svc.Create(context.Background(), validInput())
+	require.NoError(t, err)
+	repo.statsErr = errors.New("db down")
+
+	_, err = svc.Stats(context.Background(), created.ID)
+
+	require.ErrorContains(t, err, "db down")
 }
 
 func TestStatus_IsValid(t *testing.T) {

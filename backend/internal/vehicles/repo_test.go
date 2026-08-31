@@ -103,7 +103,9 @@ func TestRepo_Update_ReplacesCrew(t *testing.T) {
 	in.RouteID = ""
 	created, err := svc.Create(ctx, in)
 	require.NoError(t, err)
-	newCrew := []CrewMemberInput{{Name: "Kamala", Role: RoleNavigator}}
+	newCrew := []CrewMemberInput{
+		{Name: "Kamala", PhoneNumber: "0779876543", Role: RoleNavigator},
+	}
 
 	_, err = svc.Update(ctx, created.ID, UpdateVehicleInput{Crew: &newCrew})
 	require.NoError(t, err)

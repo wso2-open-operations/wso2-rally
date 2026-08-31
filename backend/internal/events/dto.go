@@ -35,6 +35,12 @@ type BoundaryDTO struct {
 	RadiusM int      `json:"radiusM"`
 }
 
+// RouteRefDTO names one of the event's routes on the wire.
+type RouteRefDTO struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
 // EventDTO is the event as clients see it: dates are strings, times are the
 // literal wall-clock values the organizer entered.
 type EventDTO struct {
@@ -48,6 +54,16 @@ type EventDTO struct {
 	Cipher    string      `json:"cipher"`
 	CreatedBy string      `json:"createdBy"`
 	CreatedOn string      `json:"createdOn"`
+	// Routes is always an array, never null, so the web app can map over it.
+	Routes []RouteRefDTO `json:"routes"`
+}
+
+// StatsDTO carries the dashboard's headline counts.
+type StatsDTO struct {
+	Vehicles   int `json:"vehicles"`
+	Crews      int `json:"crews"`
+	Tasks      int `json:"tasks"`
+	OpenAlerts int `json:"openAlerts"`
 }
 
 // CreateEventRequest is the POST /events body.
@@ -88,6 +104,19 @@ func (d BoundaryDTO) toDomain() Boundary {
 	return Boundary{Label: d.Label, Lat: d.Lat, Lng: d.Lng, RadiusM: d.RadiusM}
 }
 
+func toRouteRefDTOs(refs []RouteRef) []RouteRefDTO {
+	out := make([]RouteRefDTO, 0, len(refs))
+	for _, r := range refs {
+		out = append(out, RouteRefDTO{ID: r.ID, Name: r.Name})
+	}
+
+	return out
+}
+
+func toStatsDTO(s Stats) StatsDTO {
+	return StatsDTO{Vehicles: s.Vehicles, Crews: s.Crews, Tasks: s.Tasks, OpenAlerts: s.OpenAlerts}
+}
+
 func toDTO(e Event) EventDTO {
 	return EventDTO{
 		ID:        e.ID,
@@ -100,6 +129,7 @@ func toDTO(e Event) EventDTO {
 		Cipher:    e.Cipher,
 		CreatedBy: e.CreatedBy,
 		CreatedOn: e.CreatedOn.UTC().Format(time.RFC3339),
+		Routes:    toRouteRefDTOs(e.Routes),
 	}
 }
 

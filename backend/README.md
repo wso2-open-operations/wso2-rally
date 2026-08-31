@@ -14,19 +14,88 @@ Design spec: [`docs/specs/2026-07-24-wso2-motor-rally-design.md`](../docs/specs/
 
 ## Prerequisites
 
-- Go 1.23 or newer
-- Docker (for the local MySQL used by the DB-backed tests)
+- **Go 1.25** or newer (`go.mod` sets `go 1.25.6`)
+- A container runtime for the local MySQL — Docker Desktop, or Rancher Desktop
+  with `nerdctl`. `make docker-db` picks whichever the machine has.
 
-## Running it
+## Running it locally
+
+**1. Configure.** Copy the example and edit it. Every key is documented in
+place; the two that matter locally are `DB_DSN` and `TEAM_TOKEN_SECRET`.
 
 ```bash
-cp config.example.env config.env   # then edit, at minimum DB_DSN and TEAM_TOKEN_SECRET
+cp config.example.env config.env
 set -a && source config.env && set +a
+```
 
-make docker-db     # start MySQL 8 on :3306
-make run           # migrations run on boot, then the server listens on :8080
+`config.Load` fails at startup naming every missing required key at once, so a
+misconfigured environment is fixed in one pass rather than one restart per key.
 
+**2. Start the database.** MySQL 8.4 on `:3306`, with a `rally` schema and a
+`rally` user, from `docker-compose.yml`.
+
+```bash
+make docker-db
+```
+
+If this fails with *"Rancher Desktop is not running"*, start Rancher Desktop (or
+Docker Desktop) first — nothing else in this section works without a database.
+
+**3. Run the server.** Migrations apply on boot, then it listens on `:8080`.
+
+```bash
+make run
+```
+
+You should see:
+
+```
+{"level":"INFO","msg":"database migrations applied"}
+{"level":"WARN","msg":"organizer token signatures are NOT being verified; ..."}
+{"level":"INFO","msg":"server listening","port":"8080"}
+```
+
+That warning is expected locally and is the subject of the note below.
+
+**4. Check it.**
+
+```bash
 curl localhost:8080/health
+# {"status":"ok"}
+```
+
+### Calling the authenticated API locally
+
+`GET /health` is the only route that needs no token. Everything else returns
+`401` without one. `config.example.env` sets `TOKEN_VALIDATOR_ENABLED=false`
+for local work — it is an opt-out, not the default — so the service *decodes*
+organizer claims without verifying the signature, which means you can mint
+yourself a token with no Asgardeo tenant at all:
+
+```bash
+TOKEN=$(python3 -c '
+import base64, json, time
+b64 = lambda d: base64.urlsafe_b64encode(json.dumps(d).encode()).rstrip(b"=").decode()
+print(b64({"alg":"RS256","typ":"JWT"}) + "." + b64({
+    "iss":"https://api.asgardeo.io/t/local", "sub":"dev-organizer",
+    "email":"dev@wso2.com", "groups":["rally-admin"],
+    "exp":int(time.time())+86400}) + ".signature-not-checked-locally")')
+
+curl -s -H "Authorization: Bearer $TOKEN" localhost:8080/users/me
+# {"email":"dev@wso2.com","groups":["rally-admin"],"userId":"dev-organizer"}
+
+curl -s -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"offset":0,"limit":20,"filters":{}}' localhost:8080/events/search
+```
+
+The `iss` can be anything except `rally-team`, which is reserved for team tokens
+and rejected on the organizer path so a crew token cannot be replayed as staff.
+
+## Building
+
+```bash
+make build            # → bin/server, a single static binary
+go build ./...        # compile check only
 ```
 
 `make migrate-up` applies the schema and exits, for a deploy step that wants
@@ -43,7 +112,7 @@ runs without editing a single id by hand.
 Organizer requests use `{{organizerToken}}`, which a collection pre-request
 script mints for decode-only mode when it is empty. That token only works
 locally; paste a real Asgardeo id token in for a deployed environment. Crew
-requests use `{{teamToken}}`, captured from `POST /sessions/bind`.
+requests use `{{teamToken}}`, captured from `POST /sessions/join`.
 
 It runs headless too, which is the fastest smoke test of a live server:
 
@@ -82,7 +151,7 @@ machine has — Rancher Desktop in containerd mode has no dockerd for
 | Caller | Credential | How it is checked |
 |---|---|---|
 | Organizer | Asgardeo id token | JWKS signature validation, unless `TOKEN_VALIDATOR_ENABLED=false` explicitly turns it off |
-| Crew | Team JWT minted by `POST /sessions/bind` | HMAC signature, `iss=rally-team`, expiry |
+| Crew | Team JWT minted by `POST /sessions/join` | HMAC signature, `iss=rally-team`, expiry, and a device claim |
 
 Both arrive as `Authorization: Bearer <token>`. The auth middleware tries the
 team token first — it is cheap and carries our own issuer — and hands anything
@@ -96,11 +165,14 @@ else to the organizer validator. Requests then pass a role gate:
 > gets you verification, not the decode-only path — the reverse default meant a
 > deployment that merely omitted it would accept any forged token carrying
 > `groups: ["admin"]`. Anything but the opt-out needs `JWKS_ENDPOINT`, and
-> `config.Load` refuses to start without it.
+> `config.Load` refuses to start without it. It still does **not** refuse an
+> explicit `false`: nothing but review stops that value reaching a deployed
+> environment.
 
-`POST /sessions/bind` is the only unauthenticated write: binding a vehicle is
-what authenticates a crew, and it is guarded instead by the one-active-phone
-rule below.
+`POST /sessions/join` is the only unauthenticated write: joining a vehicle is
+what authenticates a crew, so there is no credential to present beforehand. It
+is guarded instead by the last four digits of the member's own phone number,
+checked against the roster.
 
 ## How a rally runs
 
@@ -109,11 +181,14 @@ rule below.
    and crews (by hand or by CSV).
 2. Publishing the event opens it to crews. Both geofences must be placed first,
    or the start could never lock and arrival could never be detected.
-3. A crew picks their vehicle on one phone. `POST /sessions/bind` mints their
-   team token. A second phone binding the same vehicle gets a `409` — the
-   **one-active-phone** rule, enforced by a unique index on
-   `(vehicle_id, active_flag)` rather than by a read-then-write check.
-4. The phone streams position to `POST /sessions/me/location`. **The server
+3. Each crew member picks their vehicle, picks their own name, and types the
+   last four digits of their own number. `POST /sessions/join` mints that
+   phone's team token. **Every phone in a car shares one session**: the first to
+   arrive creates it and the rest find it, so a crew cannot end up split across
+   two runs. One live session per vehicle is enforced by a unique index on
+   `(vehicle_id, active_flag)`, and re-joining is an upsert — a rebooted or
+   borrowed phone lands back on the same device row rather than erroring.
+4. A phone streams position to `POST /sessions/me/location`. **The server
    decides what that position means**: it evaluates every waypoint boundary,
    returns which tasks unlocked, and raises rest-lock, trivia, and arrival
    events.
