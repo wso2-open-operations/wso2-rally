@@ -1,0 +1,19 @@
+/*
+ * Copyright (c) 2026 WSO2 LLC. (https://www.wso2.com).
+ * Licensed under the Apache License, Version 2.0.
+ */
+
+/* The app owns the whole WebView: `displayMode: fullscreen` in microapp.json
+   means there is no super app header above it. */
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+/* A phone in a cradle should not rubber-band when a crew member taps a task. */
+body {
+  overscroll-behavior: none;
+  -webkit-tap-highlight-color: transparent;
+}

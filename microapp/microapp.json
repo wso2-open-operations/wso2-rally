@@ -1,0 +1,21 @@
+{
+  "name": "WSO2 Motor Rally",
+  "description": "Your car's rally companion: join your vehicle, get the 09:00 start signal, and take on the course tasks as you reach them.",
+  "promoText": "Rally day, in your pocket",
+  "appId": "wso2-motor-rally",
+  "iconUrl": "https://<host>/motor-rally/icon.png",
+  "bannerImageUrl": "https://<host>/motor-rally/banner.png",
+  "isMandatory": 0,
+  "clientId": "<client-id-of-the-asgardeo-app-registered-for-the-rally>",
+  "displayMode": "fullscreen",
+  "requiredPermissions": ["location"],
+  "versions": [
+    {
+      "version": "1.0.0",
+      "build": "1",
+      "releaseNotes": "First release: join a vehicle, geofenced start, the course tasks, arrival and vouchers.",
+      "downloadUrl": "https://<host>/motor-rally/rally-microapp-1.0.0.zip",
+      "iconUrl": "https://<host>/motor-rally/icon.png"
+    }
+  ]
+}
