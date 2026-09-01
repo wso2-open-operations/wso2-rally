@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "a1c0f3e2-7b41-4d55-9c62-rally20270000",
     "name": "WSO2 Motor Rally API",
-    "description": "The rally game engine (backend/api/openapi.yaml).\n\n## Setup\n\n1. Start the service: `set -a && source config.env && set +a`, `make docker-db`, `make run`.\n2. Send **Health / Liveness probe** to confirm `{{baseUrl}}` is reachable.\n3. Run the folders top to bottom. Every request that creates something stores its id in a collection variable, so the next request already points at it.\n\n## Auth\n\nTwo identities share this API and the collection models both.\n\n- **Organizer** — collection-level Bearer `{{organizerToken}}`. Locally the service runs with `TOKEN_VALIDATOR_ENABLED=false`, so it decodes organizer claims without checking the signature. The collection pre-request script mints a token that satisfies that mode when `organizerToken` is empty. **Against any deployed environment, paste a real Asgardeo id token into `organizerToken` instead** — the minted one will be rejected.\n- **Crew** — the *In-car (crew)* folder overrides auth to Bearer `{{teamToken}}`. `POST /sessions/join` is unauthenticated and mints that token; its test script stores it. Every phone in a car joins the *same* session and gets its own token, so re-running **Join vehicle** for a second crew member is a normal flow, not a conflict.\n\n## Not covered here\n\n`GET /ws` is a WebSocket upgrade, which a REST collection cannot carry. Open a Postman WebSocket request against `ws://localhost:8080/ws?topic=event:{{eventId}}` (organizers) or `topic=session:{{sessionId}}` (crews), passing the same bearer token. Contract: `backend/api/asyncapi.yaml`.\n\nEvery non-2xx body is exactly `{\"message\": \"...\"}`.",
+    "description": "The rally game engine (backend/api/openapi.yaml).\n\n## Setup\n\n1. Start the service: `set -a && source config.env && set +a`, `make docker-db`, `make run`.\n2. Send **Health / Liveness probe** to confirm `{{baseUrl}}` is reachable.\n3. Run the folders top to bottom. Every request that creates something stores its id in a collection variable, so the next request already points at it.\n\n## Auth\n\nTwo identities share this API and the collection models both.\n\n- **Organizer** — collection-level Bearer `{{organizerToken}}`. Locally the service runs with `TOKEN_VALIDATOR_ENABLED=false`, so it decodes organizer claims without checking the signature. The collection pre-request script mints a token that satisfies that mode when `organizerToken` is empty. **Against any deployed environment, paste a real Asgardeo id token into `organizerToken` instead** — the minted one will be rejected.\n- **Crew** — the *In-car (crew)* folder overrides auth to Bearer `{{teamToken}}`. `POST /sessions/join` mints that token in exchange for the super app's Asgardeo one — so it is *authenticated*, and in this collection it inherits `{{organizerToken}}` as a stand-in; its test script stores the team token. Every phone in a car joins the *same* session and gets its own token, so re-running **Join vehicle** for a second crew member is a normal flow, not a conflict.\n\n## Not covered here\n\n`GET /ws` is a WebSocket upgrade, which a REST collection cannot carry. Open a Postman WebSocket request against `ws://localhost:8080/ws?topic=event:{{eventId}}` (organizers) or `topic=session:{{sessionId}}` (crews), passing the same bearer token. Contract: `backend/api/asyncapi.yaml`.\n\nEvery non-2xx body is exactly `{\"message\": \"...\"}`.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "auth": {
@@ -59,7 +59,6 @@
     { "key": "taskId", "value": "", "type": "string" },
     { "key": "vehicleId", "value": "", "type": "string" },
     { "key": "crewMemberId", "value": "", "type": "string" },
-    { "key": "phoneLast4", "value": "", "type": "string" },
     { "key": "alertId", "value": "", "type": "string" },
     { "key": "sessionId", "value": "", "type": "string" },
     { "key": "deviceId", "value": "", "type": "string" }
@@ -668,14 +667,14 @@
             "body": {
               "mode": "raw",
               "options": { "raw": { "language": "json" } },
-              "raw": "{\n  \"code\": \"PKT-001\",\n  \"teamName\": \"Popcorn Pioneers\",\n  \"vehicleType\": \"SUV\",\n  \"contactNumber\": \"+94771234567\",\n  \"routeId\": \"{{routeId}}\",\n  \"crew\": [\n    { \"name\": \"Nimal Perera\", \"phoneNumber\": \"+94771234567\", \"role\": \"navigator\", \"originCountry\": \"LK\" },\n    { \"name\": \"Ayesha Fernando\", \"phoneNumber\": \"+94777654321\", \"role\": \"node\", \"originCountry\": \"LK\" }\n  ]\n}"
+              "raw": "{\n  \"code\": \"PKT-001\",\n  \"teamName\": \"Popcorn Pioneers\",\n  \"vehicleType\": \"SUV\",\n  \"contactNumber\": \"+94771234567\",\n  \"routeId\": \"{{routeId}}\",\n  \"crew\": [\n    { \"name\": \"Nimal Perera\", \"email\": \"{{organizerEmail}}\", \"phoneNumber\": \"+94771234567\", \"role\": \"navigator\", \"originCountry\": \"LK\" },\n    { \"name\": \"Ayesha Fernando\", \"email\": \"ayesha@wso2.com\", \"phoneNumber\": \"+94777654321\", \"role\": \"node\", \"originCountry\": \"LK\" }\n  ]\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/events/{{eventId}}/vehicles",
               "host": ["{{baseUrl}}"],
               "path": ["events", "{{eventId}}", "vehicles"]
             },
-            "description": "Provisions the vehicle and its crew roster in one call. The crew ids returned here are what a phone picks from at join time, and each member's `phoneNumber` is what the last-four check on `POST /sessions/join` is verified against — a member with no number on file can never join. A duplicate `code` within the event is a 409."
+            "description": "Provisions the vehicle and its crew roster in one call.\n\nEach member's `email` is what the in-car app recognises them by: `POST /sessions/join` matches the super app's token against it, so a member without one can never start. The first member here is seeded with `{{organizerEmail}}` so *Join vehicle* — which sends the collection's organizer token in place of a super-app one — finds itself on the roster.\n\n`phoneNumber` is still required, now purely so organizers can call a car that goes quiet. A duplicate `code` within the event is a 409; two members sharing an address is a 400."
           },
           "event": [
             {
@@ -688,7 +687,6 @@
                   "pm.collectionVariables.set('vehicleId', vehicle.id);",
                   "if (vehicle.crew && vehicle.crew.length) {",
                   "    pm.collectionVariables.set('crewMemberId', vehicle.crew[0].id);",
-                  "    pm.collectionVariables.set('phoneLast4', vehicle.crew[0].phoneNumber.replace(/\\D/g, '').slice(-4));",
                   "}",
                   "console.log('vehicleId =', vehicle.id, 'crewMemberId =', pm.collectionVariables.get('crewMemberId'));"
                 ]
@@ -794,7 +792,7 @@
               "host": ["{{baseUrl}}"],
               "path": ["vehicles", "{{vehicleId}}"]
             },
-            "description": "Refreshes `crewMemberId` and `phoneLast4` from the live roster, which is what `POST /sessions/join` checks a phone against."
+            "description": "Refreshes `crewMemberId` from the live roster. Joining no longer sends it — the caller is resolved from their token — but the Alerts folder and the debrief requests still address a specific member."
           },
           "event": [
             {
@@ -806,7 +804,6 @@
                   "const vehicle = pm.response.json();",
                   "if (vehicle.crew && vehicle.crew.length) {",
                   "    pm.collectionVariables.set('crewMemberId', vehicle.crew[0].id);",
-                  "    pm.collectionVariables.set('phoneLast4', vehicle.crew[0].phoneNumber.replace(/\\D/g, '').slice(-4));",
                   "}"
                 ]
               }
@@ -821,14 +818,14 @@
             "body": {
               "mode": "raw",
               "options": { "raw": { "language": "json" } },
-              "raw": "{\n  \"code\": \"PKT-001\",\n  \"teamName\": \"Popcorn Pioneers\",\n  \"vehicleType\": \"Pickup\",\n  \"contactNumber\": \"+94771234567\",\n  \"routeId\": \"{{routeId}}\",\n  \"status\": \"ok\",\n  \"crew\": [\n    { \"name\": \"Nimal Perera\", \"phoneNumber\": \"+94771234567\", \"role\": \"navigator\", \"originCountry\": \"LK\" },\n    { \"name\": \"Ayesha Fernando\", \"phoneNumber\": \"+94777654321\", \"role\": \"node\", \"originCountry\": \"LK\" }\n  ]\n}"
+              "raw": "{\n  \"code\": \"PKT-001\",\n  \"teamName\": \"Popcorn Pioneers\",\n  \"vehicleType\": \"Pickup\",\n  \"contactNumber\": \"+94771234567\",\n  \"routeId\": \"{{routeId}}\",\n  \"status\": \"ok\",\n  \"crew\": [\n    { \"name\": \"Nimal Perera\", \"email\": \"{{organizerEmail}}\", \"phoneNumber\": \"+94771234567\", \"role\": \"navigator\", \"originCountry\": \"LK\" },\n    { \"name\": \"Ayesha Fernando\", \"email\": \"ayesha@wso2.com\", \"phoneNumber\": \"+94777654321\", \"role\": \"node\", \"originCountry\": \"LK\" }\n  ]\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/vehicles/{{vehicleId}}",
               "host": ["{{baseUrl}}"],
               "path": ["vehicles", "{{vehicleId}}"]
             },
-            "description": "**A supplied `crew` replaces the whole roster** — omitting a member deletes them, and the replacements get new ids. Send the full list.\n\nBecause the ids change, the test script re-reads `crewMemberId` and `phoneLast4` from the response. A stale `crewMemberId` makes `POST /sessions/join` fail with 404.\n\n`status` (`ok`, `breakdown`, `device_issue`) is patchable here too, though the Alerts folder is what normally moves it."
+            "description": "**A supplied `crew` replaces the whole roster** — omitting a member deletes them, and the replacements get new ids. Send the full list, and keep `{{organizerEmail}}` on it or *Join vehicle* stops finding itself on the roster.\n\nBecause the ids change, the test script re-reads `crewMemberId` from the response.\n\n`status` (`ok`, `breakdown`, `device_issue`) is patchable here too, though the Alerts folder is what normally moves it."
           },
           "event": [
             {
@@ -842,7 +839,6 @@
                   "const vehicle = pm.response.json();",
                   "if (vehicle.crew && vehicle.crew.length) {",
                   "    pm.collectionVariables.set('crewMemberId', vehicle.crew[0].id);",
-                  "    pm.collectionVariables.set('phoneLast4', vehicle.crew[0].phoneNumber.replace(/\\D/g, '').slice(-4));",
                   "}"
                 ]
               }
@@ -1070,15 +1066,14 @@
           "name": "Join vehicle (mints the team token)",
           "request": {
             "method": "POST",
-            "auth": { "type": "noauth" },
             "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
               "mode": "raw",
               "options": { "raw": { "language": "json" } },
-              "raw": "{\n  \"vehicleId\": \"{{vehicleId}}\",\n  \"crewMemberId\": \"{{crewMemberId}}\",\n  \"phoneLast4\": \"{{phoneLast4}}\"\n}"
+              "raw": "{\n  \"vehicleId\": \"{{vehicleId}}\"\n}"
             },
             "url": { "raw": "{{baseUrl}}/sessions/join", "host": ["{{baseUrl}}"], "path": ["sessions", "join"] },
-            "description": "The zero-facilitator start: no one hands out credentials, the crew picks their own vehicle, and joining is what authenticates the phone.\n\n`crewMemberId` is chosen from the vehicle's own roster; `phoneLast4` is the last four digits of that member's number as the organizer entered it, which is the only thing standing between a stranger and someone else's car.\n\n**Every phone in the car joins the same session.** The first to arrive creates it and the rest attach to it — each gets its own device row and its own team token, and `crew` in the response is who else is already aboard. There is no one-phone-per-vehicle conflict; send this again with a second `crewMemberId` to model a second phone.\n\nFailure modes: 409 if the event is not `active` (publish it first), 404 if the member is not on this vehicle's roster, 403 if the last four digits do not match. The 403 never says which half was wrong."
+            "description": "Trades the super app's Asgardeo token for the rally's team token — the only endpoint that takes one kind and returns the other.\n\nThe in-car app is embedded in the WSO2 Open Super App, so the phone already holds an Asgardeo access token minted for the rally's `clientId` (it asks the host for one over the native bridge). This endpoint therefore asks only *which car*: the person is resolved from the token's `email` claim, matched case-insensitively against `crew_member.email` on that vehicle's roster. No name picker, no phone digits — both existed only while there was no identity provider.\n\n**In Postman this inherits the collection's `{{organizerToken}}`**, standing in for the super app's token, so its `email` must be on the roster. *Create vehicle* seeds `{{organizerEmail}}` as the first crew member for exactly that reason.\n\n**Every phone in the car joins the same session.** The first to arrive creates it and the rest attach — each gets its own device row and its own token, and `crew` in the response is who else is aboard. Re-joining is an upsert, so a rebooted phone lands back on its own row.\n\nFailure modes: **401** with no token, **403** if the signed-in caller is not on that vehicle's roster, **409** if the event is not `active` (publish it first), **404** for an unknown vehicle."
           },
           "event": [
             {

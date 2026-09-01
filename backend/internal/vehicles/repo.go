@@ -31,8 +31,9 @@ const vehicleColumns = "id, event_id, code, team_name, vehicle_type, contact_num
 
 const insertVehicleQuery = "INSERT INTO vehicle (" + vehicleColumns + ") VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
 
-const insertCrewQuery = "INSERT INTO crew_member (id, vehicle_id, name, phone_number, role, origin_country) " +
-	"VALUES (?, ?, ?, ?, ?, ?)"
+const crewColumns = "id, vehicle_id, name, email, phone_number, role, origin_country"
+
+const insertCrewQuery = "INSERT INTO crew_member (" + crewColumns + ") VALUES (?, ?, ?, ?, ?, ?, ?)"
 
 type sqlRepo struct {
 	db *sql.DB
@@ -75,8 +76,8 @@ func (r *sqlRepo) CreateMany(ctx context.Context, list []Vehicle) error {
 				return fmt.Errorf("insert vehicle %s: %w", v.Code, err)
 			}
 			for _, member := range v.Crew {
-				_, err := crewStmt.ExecContext(ctx,
-					member.ID, v.ID, member.Name, member.PhoneNumber, string(member.Role), nullString(member.OriginCountry))
+				_, err := crewStmt.ExecContext(ctx, member.ID, v.ID, member.Name, member.Email,
+					member.PhoneNumber, string(member.Role), nullString(member.OriginCountry))
 				if err != nil {
 					return fmt.Errorf("insert crew member of vehicle %s: %w", v.Code, err)
 				}
@@ -154,8 +155,8 @@ func (r *sqlRepo) Update(ctx context.Context, v Vehicle) error {
 		defer func() { _ = crewStmt.Close() }()
 
 		for _, member := range v.Crew {
-			_, err := crewStmt.ExecContext(ctx,
-				member.ID, v.ID, member.Name, member.PhoneNumber, string(member.Role), nullString(member.OriginCountry))
+			_, err := crewStmt.ExecContext(ctx, member.ID, v.ID, member.Name, member.Email,
+				member.PhoneNumber, string(member.Role), nullString(member.OriginCountry))
 			if err != nil {
 				return fmt.Errorf("insert crew member of vehicle %s: %w", v.ID, err)
 			}
@@ -318,7 +319,7 @@ func (r *sqlRepo) attachCrew(ctx context.Context, list []Vehicle, byID map[strin
 		ids = append(ids, v.ID)
 	}
 
-	query := "SELECT id, vehicle_id, name, phone_number, role, origin_country FROM crew_member WHERE vehicle_id IN (" +
+	query := "SELECT " + crewColumns + " FROM crew_member WHERE vehicle_id IN (" +
 		placeholders(len(ids)) + ") ORDER BY vehicle_id, name"
 	rows, err := r.db.QueryContext(ctx, query, ids...)
 	if err != nil {
@@ -343,9 +344,7 @@ func (r *sqlRepo) attachCrew(ctx context.Context, list []Vehicle, byID map[strin
 }
 
 func (r *sqlRepo) crewOf(ctx context.Context, vehicleID string) ([]CrewMember, error) {
-	const query = `
-		SELECT id, vehicle_id, name, phone_number, role, origin_country
-		FROM crew_member WHERE vehicle_id = ? ORDER BY name`
+	const query = "SELECT " + crewColumns + " FROM crew_member WHERE vehicle_id = ? ORDER BY name"
 
 	rows, err := r.db.QueryContext(ctx, query, vehicleID)
 	if err != nil {
@@ -452,7 +451,7 @@ func scanCrewMember(row rowScanner) (CrewMember, error) {
 		role          string
 		originCountry sql.NullString
 	)
-	if err := row.Scan(&member.ID, &member.VehicleID, &member.Name, &member.PhoneNumber,
+	if err := row.Scan(&member.ID, &member.VehicleID, &member.Name, &member.Email, &member.PhoneNumber,
 		&role, &originCountry); err != nil {
 		return CrewMember{}, err
 	}

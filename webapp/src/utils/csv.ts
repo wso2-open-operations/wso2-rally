@@ -77,11 +77,13 @@ export const VEHICLE_CSV_HEADER = [
 
 /**
  * A one-row example file, for the "download a template" link on the import
- * dialog. `crew_names` entries are `Name:phone`, joined by `|` — the phone is
- * not optional, because its last four digits are how that member joins the car.
+ * dialog. `crew_names` entries are `Name:email:phone`, joined by `|`. None of
+ * the three is optional: the email is how the in-car app recognises a member,
+ * and the phone is how an organizer reaches a silent car.
  */
 export const VEHICLE_CSV_TEMPLATE = [
   VEHICLE_CSV_HEADER.join(","),
-  "PKT-001,Data Dashers,SUV,0712345678,Inland,Nimal Perera:0771234567|Ayesha Fernando:0777654321",
+  "PKT-001,Data Dashers,SUV,0712345678,Inland," +
+    "Nimal Perera:nimal@wso2.com:0771234567|Ayesha Fernando:ayesha@wso2.com:0777654321",
   "",
 ].join("\n");

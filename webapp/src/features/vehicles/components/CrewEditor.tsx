@@ -30,6 +30,7 @@ import {
   MIN_PHONE_DIGITS,
   digitCount,
   emptyCrewMember,
+  looksLikeEmail,
   type CrewMember,
   type CrewRole,
 } from "@/types/vehicle";
@@ -43,10 +44,11 @@ export interface CrewEditorProps {
 /**
  * The crew roster inside the vehicle dialog.
  *
- * Each member's phone number is required, and the helper text says why: its
- * last four digits are what that person types to join the car, so a blank one
- * ships a roster that looks provisioned and leaves someone stranded at the
- * start line.
+ * Each member's WSO2 email is required, and the helper text says why: the in-car
+ * app is embedded in the super app, which signs them in, and the backend matches
+ * that identity against this address. A blank one ships a roster that looks
+ * provisioned and leaves someone stranded at the start line. The phone number is
+ * required too, but only so an organizer can call a car that goes quiet.
  *
  * @param {CrewEditorProps} props - The roster, disabled state and change handler.
  * @returns {JSX.Element} The crew editor.
@@ -74,6 +76,7 @@ export default function CrewEditor({
       {crew.map((member, index) => {
         const digits = digitCount(member.phoneNumber);
         const isPhoneShort = member.phoneNumber.trim() !== "" && digits < MIN_PHONE_DIGITS;
+        const isEmailWrong = member.email.trim() !== "" && !looksLikeEmail(member.email);
 
         return (
           <Box
@@ -93,10 +96,24 @@ export default function CrewEditor({
             />
             <TextField
               disabled={disabled}
+              error={isEmailWrong}
+              helperText={
+                isEmailWrong ? "Their WSO2 address — it is how the in-car app knows them." : undefined
+              }
+              label="WSO2 email"
+              onChange={(changeEvent) => update(index, { email: changeEvent.target.value })}
+              required
+              size="small"
+              sx={{ flex: "2 1 200px" }}
+              type="email"
+              value={member.email}
+            />
+            <TextField
+              disabled={disabled}
               error={isPhoneShort}
               helperText={
                 isPhoneShort
-                  ? `At least ${MIN_PHONE_DIGITS} digits — the last four are how they join.`
+                  ? `At least ${MIN_PHONE_DIGITS} digits, so organizers can reach the car.`
                   : undefined
               }
               label="Phone"

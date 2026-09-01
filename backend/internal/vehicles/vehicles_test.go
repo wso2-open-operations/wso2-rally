@@ -159,8 +159,8 @@ func validInput() CreateVehicleInput {
 		ContactNumber: "+94771234567",
 		RouteID:       "route-inland",
 		Crew: []CrewMemberInput{
-			{Name: "Nimal", PhoneNumber: "0771112233", Role: RoleNavigator, OriginCountry: "LK"},
-			{Name: "Sunil", PhoneNumber: "0719998877"},
+			{Name: "Nimal", Email: "nimal@wso2.com", PhoneNumber: "0771112233", Role: RoleNavigator, OriginCountry: "LK"},
+			{Name: "Sunil", Email: "sunil@wso2.com", PhoneNumber: "0719998877"},
 		},
 	}
 }
@@ -220,7 +220,7 @@ func TestService_Update_ReplacesCrewWholesale(t *testing.T) {
 	svc := NewService(newFakeRepo())
 	created, err := svc.Create(context.Background(), validInput())
 	require.NoError(t, err)
-	newCrew := []CrewMemberInput{{Name: "Kamala", PhoneNumber: "0761234567", Role: RoleNavigator}}
+	newCrew := []CrewMemberInput{{Name: "Kamala", Email: "kamala@wso2.com", PhoneNumber: "0761234567", Role: RoleNavigator}}
 
 	updated, err := svc.Update(context.Background(), created.ID, UpdateVehicleInput{Crew: &newCrew})
 
@@ -258,8 +258,8 @@ func TestService_SetStatus_RejectsUnknownStatus(t *testing.T) {
 // Each crew member is Name:phone. A bare name is rejected, because the phone
 // number is what lets that member join their car.
 const importCSV = `code,team_name,vehicle_type,contact_number,route_name,crew_names
-PKT-001,Packet Pioneers,SUV,+94771234567,Inland,Nimal:0771112233|Sunil:0719998877
-PKT-002,Byte Brigade,Van,+94777654321,Wetlands,Kamala:0761234567
+PKT-001,Packet Pioneers,SUV,+94771234567,Inland,Nimal:nimal@wso2.com:0771112233|Sunil:sunil@wso2.com:0719998877
+PKT-002,Byte Brigade,Van,+94777654321,Wetlands,Kamala:kamala@wso2.com:0761234567
 `
 
 func TestService_ImportCSV_CreatesVehiclesAndCrew(t *testing.T) {
@@ -333,7 +333,7 @@ func TestService_ImportCSV_Rejections(t *testing.T) {
 		{"header only", "code,team_name,vehicle_type,contact_number,route_name,crew_names\n", "no vehicles"},
 		{
 			"wrong columns",
-			"vehicle,team,type,phone,route,crew\nPKT-001,T,SUV,1,Inland,A:0771112233\n",
+			"vehicle,team,type,phone,route,crew\nPKT-001,T,SUV,1,Inland,A:a@wso2.com:0771112233\n",
 			"column 1",
 		},
 		{
@@ -348,13 +348,13 @@ func TestService_ImportCSV_Rejections(t *testing.T) {
 		},
 		{
 			"unknown route",
-			"code,team_name,vehicle_type,contact_number,route_name,crew_names\nPKT-001,Team,SUV,1,Highlands,A:0771112233\n",
+			"code,team_name,vehicle_type,contact_number,route_name,crew_names\nPKT-001,Team,SUV,1,Highlands,A:a@wso2.com:0771112233\n",
 			"does not exist",
 		},
 		{
 			"duplicate code within the file",
 			"code,team_name,vehicle_type,contact_number,route_name,crew_names\n" +
-				"PKT-001,Team,SUV,1,Inland,A:0771112233\nPKT-001,Other,Van,2,Inland,B:0719998877\n",
+				"PKT-001,Team,SUV,1,Inland,A:a@wso2.com:0771112233\nPKT-001,Other,Van,2,Inland,B:b@wso2.com:0719998877\n",
 			"more than once",
 		},
 		{
@@ -377,7 +377,7 @@ func TestService_ImportCSV_Rejections(t *testing.T) {
 func TestService_ImportCSV_IsAllOrNothing(t *testing.T) {
 	repo := newFakeRepo()
 	body := "code,team_name,vehicle_type,contact_number,route_name,crew_names\n" +
-		"PKT-001,Team One,SUV,1,Inland,A:0771112233\nPKT-002,Team Two,Van,2,Highlands,B:0719998877\n"
+		"PKT-001,Team One,SUV,1,Inland,A:a@wso2.com:0771112233\nPKT-002,Team Two,Van,2,Highlands,B:b@wso2.com:0719998877\n"
 
 	_, err := NewService(repo).ImportCSV(context.Background(), eventID, strings.NewReader(body))
 
@@ -501,4 +501,82 @@ func TestService_Search_FiltersByQueryAndRoute(t *testing.T) {
 	_, total, err = svc.Search(ctx, eventID, SearchFilter{}, page)
 	require.NoError(t, err)
 	require.Equal(t, 3, total, "the zero filter matches every vehicle of the event")
+}
+
+// The email is what POST /sessions/join matches the super app's token against,
+// so a roster row without one is a crew member who cannot start the rally. It
+// is refused at provisioning time, where an organizer can still fix it.
+func TestService_Create_RequiresAnEmailPerCrewMember(t *testing.T) {
+	in := validInput()
+	in.Crew[1].Email = ""
+
+	_, err := NewService(newFakeRepo()).Create(context.Background(), in)
+
+	require.ErrorIs(t, err, apperr.ErrValidation)
+	require.Contains(t, err.Error(), "Sunil", "the message must name the row to fix")
+}
+
+func TestService_Create_RejectsAnEmailThatIsNotOne(t *testing.T) {
+	for _, email := range []string{"nimal", "nimal@", "@wso2.com", "nimal wso2.com"} {
+		t.Run(email, func(t *testing.T) {
+			in := validInput()
+			in.Crew[0].Email = email
+
+			_, err := NewService(newFakeRepo()).Create(context.Background(), in)
+
+			require.ErrorIs(t, err, apperr.ErrValidation)
+		})
+	}
+}
+
+// Two people in one car cannot share an address, or a join could not tell which
+// of them is calling.
+func TestService_Create_RejectsADuplicateEmailInTheSameVehicle(t *testing.T) {
+	in := validInput()
+	in.Crew[1].Email = "Nimal@WSO2.com" // same mailbox, different case
+
+	_, err := NewService(newFakeRepo()).Create(context.Background(), in)
+
+	require.ErrorIs(t, err, apperr.ErrValidation)
+}
+
+func TestService_Create_NormalizesTheEmail(t *testing.T) {
+	in := validInput()
+	in.Crew[0].Email = "  Nimal@WSO2.com "
+
+	got, err := NewService(newFakeRepo()).Create(context.Background(), in)
+
+	require.NoError(t, err)
+	require.Equal(t, "nimal@wso2.com", got.Crew[0].Email,
+		"stored lowercased and trimmed so the join match is a plain comparison")
+}
+
+func TestService_ImportCSV_CarriesTheCrewEmail(t *testing.T) {
+	repo := newFakeRepo()
+	svc := NewService(repo)
+
+	imported, err := svc.ImportCSV(context.Background(), eventID, strings.NewReader(importCSV))
+
+	require.NoError(t, err)
+	require.Equal(t, 2, imported)
+	var nimal CrewMember
+	for _, v := range repo.stored {
+		for _, member := range v.Crew {
+			if member.Name == "Nimal" {
+				nimal = member
+			}
+		}
+	}
+	require.Equal(t, "nimal@wso2.com", nimal.Email)
+	require.Equal(t, "0771112233", nimal.PhoneNumber)
+}
+
+func TestService_ImportCSV_RejectsACrewEntryWithNoEmail(t *testing.T) {
+	const noEmail = `code,team_name,vehicle_type,contact_number,route_name,crew_names
+PKT-001,Packet Pioneers,SUV,+94771234567,Inland,Nimal:0771112233
+`
+
+	_, err := NewService(newFakeRepo()).ImportCSV(context.Background(), eventID, strings.NewReader(noEmail))
+
+	require.ErrorIs(t, err, apperr.ErrValidation)
 }

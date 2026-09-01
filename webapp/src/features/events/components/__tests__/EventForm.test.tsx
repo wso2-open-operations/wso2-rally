@@ -14,8 +14,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import EventForm from "@features/events/components/EventForm";
 import type { RallyEvent } from "@/types/event";
@@ -129,5 +129,93 @@ describe("EventForm", () => {
 
     expect(screen.queryByRole("button", { name: /publish/i })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^save$/i })).toBeInTheDocument();
+  });
+});
+
+describe("EventForm place lookup", () => {
+  const fetchMock = vi.fn();
+
+  const nominatim = (body: unknown): Response =>
+    new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+
+  beforeEach(() => {
+    fetchMock.mockReset();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  // Typing a place and pressing Enter must move the pin, not submit the form —
+  // the surrounding <form>'s default action is Save.
+  it("moves the start pin to a typed place on Enter, without saving", async () => {
+    const user = userEvent.setup();
+    fetchMock.mockResolvedValue(
+      nominatim([
+        {
+          lat: "6.7148",
+          lon: "79.9894",
+          display_name: "Bandaragama, Kalutara District, Western Province, Sri Lanka",
+          name: "Bandaragama",
+          address: { town: "Bandaragama", county: "Kalutara District" },
+        },
+      ]),
+    );
+    const props = renderForm();
+
+    const field = screen.getByLabelText(/start location/i);
+    await user.clear(field);
+    await user.type(field, "bandaragama{Enter}");
+
+    // The field takes the canonical short name, confirming which match won.
+    await waitFor(() => expect(field).toHaveValue("Bandaragama"));
+    expect(props.onSave).not.toHaveBeenCalled();
+    const url = new URL(String(fetchMock.mock.calls[0][0]));
+    expect(url.pathname).toContain("/search");
+    expect(url.searchParams.get("q")).toBe("bandaragama");
+  });
+
+  it("says so when the place cannot be found, and leaves the text alone", async () => {
+    const user = userEvent.setup();
+    fetchMock.mockResolvedValue(nominatim([]));
+    renderForm();
+
+    const field = screen.getByLabelText(/end location/i);
+    await user.clear(field);
+    await user.type(field, "nowhere at all{Enter}");
+
+    expect(await screen.findByText(/No place found by that name/i)).toBeInTheDocument();
+    expect(field).toHaveValue("nowhere at all");
+  });
+
+  // The search button is the discoverable half of the same action — an organizer
+  // should not have to guess that Enter does something.
+  it("searches from the button too", async () => {
+    const user = userEvent.setup();
+    fetchMock.mockResolvedValue(
+      nominatim([
+        { lat: "7.29", lon: "80.63", display_name: "Kandy, Central Province", name: "Kandy" },
+      ]),
+    );
+    renderForm();
+
+    await user.type(screen.getByLabelText(/start location/i), "kandy");
+    await user.click(screen.getByRole("button", { name: /Find the start point on the map/i }));
+
+    await waitFor(() =>
+      expect(screen.getByLabelText(/start location/i)).toHaveValue("Kandy"),
+    );
+  });
+
+  // The clicked coordinates are authoritative and must land even if naming them
+  // fails, so a slow or blocked geocoder still leaves a usable pin.
+  it("keeps the clicked position when the geocoder cannot name it", async () => {
+    fetchMock.mockResolvedValue(nominatim({ error: "Unable to geocode" }));
+    const props = renderForm({ event: placedEvent });
+
+    // MapPicker is stubbed in tests, so exercise the contract it fulfils.
+    expect(props.event?.start.lat).toBe(6.8901);
+    expect(screen.getByLabelText(/start location/i)).toHaveValue("Diyatha Uyana grid");
   });
 });

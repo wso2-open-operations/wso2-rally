@@ -40,7 +40,7 @@ const lastRequest = (): [string, RequestInit] =>
   fetchMock.mock.calls[fetchMock.mock.calls.length - 1] as [string, RequestInit];
 
 describe("useAuthApiClient", () => {
-  it("prefixes the backend base url and sends both auth headers", async () => {
+  it("prefixes the backend base url and sends the bearer token", async () => {
     fetchMock.mockResolvedValue(jsonResponse({ items: [] }));
     const { result } = renderHook(() => useAuthApiClient());
 
@@ -50,7 +50,12 @@ describe("useAuthApiClient", () => {
     expect(url).toBe("http://localhost:8080/events/search");
     const headers = options.headers as Headers;
     expect(headers.get("Authorization")).toBe("Bearer mock-id-token");
-    expect(headers.get("x-user-id-token")).toBe("mock-id-token");
+    // The token travels in exactly one header. x-user-id-token was mirrored
+    // from customer-portal, where the gateway consumes Authorization and the
+    // service relays the raw token to downstream APIs. This backend reads only
+    // Authorization and calls nothing downstream, so the copy was a second
+    // place for a credential to leak with no reader.
+    expect(headers.get("x-user-id-token")).toBeNull();
     expect(headers.get("Content-Type")).toBe("application/json");
   });
 

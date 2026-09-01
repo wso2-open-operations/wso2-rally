@@ -94,18 +94,46 @@ func TestAuth_RejectsTeamTokenWithWrongSecret(t *testing.T) {
 	require.Equal(t, http.StatusUnauthorized, rr.Code)
 }
 
+// Since the micro app is embedded in the super app, every crew member holds a
+// valid Asgardeo token too — which this middleware sees as an organizer-kind
+// identity. Token kind therefore no longer separates staff from participants,
+// and without a group check a crew member could read the whole organizer
+// surface: the fleet with everyone's phone numbers, the live monitor, the lot.
 func TestRequireOrganizer(t *testing.T) {
 	tests := []struct {
 		name     string
 		identity authz.Identity
 		want     int
 	}{
-		{"organizer passes", authz.Identity{Kind: authz.KindOrganizer, UserID: "u"}, http.StatusOK},
-		{"team is forbidden", authz.Identity{Kind: authz.KindTeam, SessionID: "s"}, http.StatusForbidden},
+		{
+			"organizer in the group passes",
+			authz.Identity{Kind: authz.KindOrganizer, UserID: "u", Groups: []string{"rally-organizer"}},
+			http.StatusOK,
+		},
+		{
+			"an admin is also an organizer",
+			authz.Identity{Kind: authz.KindOrganizer, UserID: "u", Groups: []string{"rally-admin"}},
+			http.StatusOK,
+		},
+		{
+			"a signed-in crew member is not staff",
+			authz.Identity{Kind: authz.KindOrganizer, UserID: "u", Groups: []string{"rally-crew"}},
+			http.StatusForbidden,
+		},
+		{
+			"no groups at all",
+			authz.Identity{Kind: authz.KindOrganizer, UserID: "u"},
+			http.StatusForbidden,
+		},
+		{
+			"team token is forbidden however it is grouped",
+			authz.Identity{Kind: authz.KindTeam, SessionID: "s", Groups: []string{"rally-organizer"}},
+			http.StatusForbidden,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rr := serveWithIdentity(t, RequireOrganizer, tt.identity)
+			rr := serveWithIdentity(t, RequireOrganizer(testConfig()), tt.identity)
 
 			require.Equal(t, tt.want, rr.Code)
 		})
@@ -140,13 +168,17 @@ func TestRequireAdmin(t *testing.T) {
 func TestRequire_WithoutIdentityIs401(t *testing.T) {
 	rr := httptest.NewRecorder()
 
-	RequireOrganizer(okHandler(nil)).ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/x", nil))
+	RequireOrganizer(testConfig())(okHandler(nil)).ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/x", nil))
 
 	require.Equal(t, http.StatusUnauthorized, rr.Code)
 }
 
 func testConfig() config.Config {
-	return config.Config{TeamTokenSecret: teamSecret, AdminRole: "rally-admin"}
+	return config.Config{
+		TeamTokenSecret: teamSecret,
+		AdminRole:       "rally-admin",
+		OrganizerRole:   "rally-organizer",
+	}
 }
 
 // serve runs one request through mw, recording the identity the handler sees.
@@ -204,7 +236,7 @@ func TestAuth_401CarriesTheBearerChallenge(t *testing.T) {
 // A 403 is not a challenge: the caller authenticated fine, they just may not
 // touch this resource.
 func TestRequireOrganizer_403HasNoChallenge(t *testing.T) {
-	rr := serveWithIdentity(t, RequireOrganizer, authz.Identity{Kind: authz.KindTeam, SessionID: "s"})
+	rr := serveWithIdentity(t, RequireOrganizer(testConfig()), authz.Identity{Kind: authz.KindTeam, SessionID: "s"})
 
 	require.Equal(t, http.StatusForbidden, rr.Code)
 	require.Empty(t, rr.Header().Get("WWW-Authenticate"))

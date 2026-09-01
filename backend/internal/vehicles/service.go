@@ -300,11 +300,24 @@ func buildVehicle(in CreateVehicleInput) (Vehicle, error) {
 
 func buildCrew(vehicleID string, inputs []CrewMemberInput) ([]CrewMember, error) {
 	crew := make([]CrewMember, 0, len(inputs))
+	seenEmails := make(map[string]string, len(inputs))
 	for _, in := range inputs {
 		name := strings.TrimSpace(in.Name)
 		if name == "" {
 			return nil, apperr.Validationf("crew member name is required")
 		}
+		email, err := normalizeCrewEmail(name, in.Email)
+		if err != nil {
+			return nil, err
+		}
+		// Two people in one car cannot share an address: a join would not know
+		// which of them was calling.
+		if other, taken := seenEmails[email]; taken {
+			return nil, apperr.Validationf(
+				"crew members %q and %q cannot share the address %s", other, name, email)
+		}
+		seenEmails[email] = name
+
 		phone := strings.TrimSpace(in.PhoneNumber)
 		if err := validatePhoneNumber(name, phone); err != nil {
 			return nil, err
@@ -320,6 +333,7 @@ func buildCrew(vehicleID string, inputs []CrewMemberInput) ([]CrewMember, error)
 			ID:            store.NewID(),
 			VehicleID:     vehicleID,
 			Name:          name,
+			Email:         email,
 			PhoneNumber:   phone,
 			Role:          role,
 			OriginCountry: strings.TrimSpace(in.OriginCountry),
@@ -329,12 +343,35 @@ func buildCrew(vehicleID string, inputs []CrewMemberInput) ([]CrewMember, error)
 	return crew, nil
 }
 
-// validatePhoneNumber requires a number a member could actually join with.
+// normalizeCrewEmail lowercases, trims and sanity-checks a crew address.
+//
+// Stored normalized so the join match is a plain comparison rather than a
+// case-folding one in SQL. The shape check is deliberately shallow — one `@`
+// with something either side — because a stricter rule rejects real addresses,
+// and the address is proved by Asgardeo at join time, not by this validation.
+// The member's name is in every message: a rejected CSV of 150 rows is useless
+// without it.
+func normalizeCrewEmail(name, email string) (string, error) {
+	normalized := strings.ToLower(strings.TrimSpace(email))
+	if normalized == "" {
+		return "", apperr.Validationf(
+			"crew member %q needs a WSO2 email address — it is how the in-car app recognises them", name)
+	}
+
+	local, domain, found := strings.Cut(normalized, "@")
+	if !found || local == "" || domain == "" || strings.ContainsAny(normalized, " \t") {
+		return "", apperr.Validationf("crew member %q has %q, which is not an email address", name, email)
+	}
+
+	return normalized, nil
+}
+
+// validatePhoneNumber requires a number an organizer could actually dial.
 //
 // Only digits are counted, so any punctuation an organizer's spreadsheet
-// carries is fine — what is rejected is a number with too few digits to
-// identify its owner by its last four. The member's name is in the message
-// because a rejected CSV of 150 rows is useless without it.
+// carries is fine — what is rejected is a number too short to call. The
+// member's name is in the message because a rejected CSV of 150 rows is
+// useless without it.
 func validatePhoneNumber(name, phone string) error {
 	digits := 0
 	for _, r := range phone {
@@ -344,7 +381,7 @@ func validatePhoneNumber(name, phone string) error {
 	}
 	if digits < MinPhoneDigits {
 		return apperr.Validationf(
-			"crew member %q needs a phone number of at least %d digits — its last four are how they join",
+			"crew member %q needs a phone number of at least %d digits so organizers can reach the car",
 			name, MinPhoneDigits)
 	}
 

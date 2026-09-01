@@ -61,6 +61,14 @@ type Config struct {
 	TokenValidatorEnabled bool
 	// AdminRole is the group claim that grants organizer admin actions.
 	AdminRole string
+	// OrganizerRole is the group claim that admits someone to the organizer
+	// surface at all.
+	//
+	// It exists because the in-car app is embedded in the super app, so every
+	// participant holds a valid Asgardeo token: "has a decodable organizer
+	// token" stopped meaning "is staff". Defaults to AdminRole, which keeps a
+	// deployment that only ever configured one group working unchanged.
+	OrganizerRole string
 	// CORSAllowOrigin enables a permissive dev-only CORS layer when set. In
 	// Choreo the gateway owns CORS and this stays empty.
 	CORSAllowOrigin string
@@ -81,8 +89,15 @@ func Load() (Config, error) {
 		JWKSEndpoint:          os.Getenv("JWKS_ENDPOINT"),
 		TokenValidatorEnabled: !strings.EqualFold(os.Getenv("TOKEN_VALIDATOR_ENABLED"), "false"),
 		AdminRole:             getenv("ADMIN_ROLE", defaultAdminRole),
+		OrganizerRole:         os.Getenv("ORGANIZER_ROLE"), // defaulted to AdminRole below
 		CORSAllowOrigin:       os.Getenv("CORS_ALLOW_ORIGIN"),
 		LogLevel:              strings.ToUpper(getenv("LOG_LEVEL", defaultLogLevel)),
+	}
+
+	// Fail closed rather than open: with no organizer group configured, only
+	// the admin group reaches the organizer surface.
+	if c.OrganizerRole == "" {
+		c.OrganizerRole = c.AdminRole
 	}
 
 	if raw := os.Getenv("TEAM_TOKEN_TTL"); raw != "" {

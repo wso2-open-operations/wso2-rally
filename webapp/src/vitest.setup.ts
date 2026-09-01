@@ -56,5 +56,14 @@ vi.mock("react-leaflet", () => ({
   Polyline: () => null,
   Tooltip: () => null,
   useMapEvents: () => null,
-  useMap: () => ({ setView: vi.fn(), flyTo: vi.fn() }),
+  // Widen this as components reach for more of the map API. A method a component
+  // calls but the stub lacks fails inside react-leaflet, not in the component,
+  // which is a confusing place to debug from.
+  useMap: () => ({
+    setView: vi.fn(),
+    flyTo: vi.fn(),
+    getZoom: vi.fn(() => 13),
+    getCenter: vi.fn(() => ({ lat: 0, lng: 0 })),
+    invalidateSize: vi.fn(),
+  }),
 }));

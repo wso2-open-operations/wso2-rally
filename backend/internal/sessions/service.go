@@ -37,10 +37,6 @@ const lunchPassesPerCrew = 1
 // entryCodeLength is how much of a fresh id becomes the printed entry code.
 const entryCodeLength = 6
 
-// phoneLast4Length is how many digits of their own number a member types to
-// prove who they are.
-const phoneLast4Length = 4
-
 // Repo is the persistence contract for the in-car runtime.
 type Repo interface {
 	// JoinTargetOf returns what is needed to join a vehicle, or
@@ -148,9 +144,10 @@ func NewService(repo Repo, minter TokenMinter, alertRaiser AlertRaiser, broadcas
 // Join puts one crew member's phone into their vehicle's run and returns the
 // team token it will carry.
 //
-// This is the zero-facilitator start: no one hands out credentials. A member
-// picks their car, picks their own name, and types the last four digits of their
-// own number — which is the whole of participant authentication.
+// This is the zero-facilitator start: no one hands out credentials. The super
+// app has already authenticated the person, so a member answers one question —
+// which car am I in — and this trades their Asgardeo identity for a team token
+// after finding them on that vehicle's roster by email.
 //
 // Every phone in the car shares one session. The first to arrive creates it and
 // the rest find it, so the crew cannot end up split across two runs. Re-joining
@@ -158,10 +155,14 @@ func NewService(repo Repo, minter TokenMinter, alertRaiser AlertRaiser, broadcas
 // was swapped for a borrowed one lands back on the same device row.
 func (s *Service) Join(ctx context.Context, in JoinInput) (JoinResult, error) {
 	if in.VehicleID == "" {
-		return JoinResult{}, apperr.Validationf("vehicle id is required")
+		return JoinResult{}, apperr.Validationf("choose your vehicle")
 	}
-	if in.CrewMemberID == "" {
-		return JoinResult{}, apperr.Validationf("choose your name from the crew list")
+	if normalizeEmail(in.CallerEmail) == "" {
+		// The token carried no email claim, so there is nothing to match a
+		// roster row against. Never fall back to a body-supplied identity: a
+		// phone that could name its own email could join any car it liked.
+		return JoinResult{}, apperr.Validationf(
+			"your account has no email address, so we cannot find you on a crew list")
 	}
 
 	target, err := s.repo.JoinTargetOf(ctx, in.VehicleID)
@@ -169,11 +170,8 @@ func (s *Service) Join(ctx context.Context, in JoinInput) (JoinResult, error) {
 		return JoinResult{}, err
 	}
 
-	member, err := memberOf(target.Crew, in.CrewMemberID)
+	member, err := memberOf(target.Crew, in.CallerEmail)
 	if err != nil {
-		return JoinResult{}, err
-	}
-	if err := checkPhoneLast4(member.PhoneNumber, in.PhoneLast4); err != nil {
 		return JoinResult{}, err
 	}
 
@@ -190,9 +188,9 @@ func (s *Service) Join(ctx context.Context, in JoinInput) (JoinResult, error) {
 		return JoinResult{}, err
 	}
 
-	device, err := s.repo.UpsertDevice(ctx, session.ID, in.CrewMemberID)
+	device, err := s.repo.UpsertDevice(ctx, session.ID, member.ID)
 	if err != nil {
-		return JoinResult{}, fmt.Errorf("add device for crew member %s: %w", in.CrewMemberID, err)
+		return JoinResult{}, fmt.Errorf("add device for crew member %s: %w", member.ID, err)
 	}
 
 	crew, err := s.repo.DevicesOf(ctx, session.ID)
@@ -251,46 +249,26 @@ func (s *Service) liveOrNewSession(ctx context.Context, eventID, vehicleID strin
 	}
 }
 
-// memberOf finds the chosen member on the vehicle's roster.
-func memberOf(roster []CrewRosterMember, crewMemberID string) (CrewRosterMember, error) {
+// memberOf finds the signed-in caller on the vehicle's roster.
+//
+// Matching is case- and space-insensitive: Asgardeo may hand back an address in
+// a different case than the organizer typed into the roster, and locking a crew
+// member out over capitalisation on rally morning would be indefensible.
+func memberOf(roster []CrewRosterMember, callerEmail string) (CrewRosterMember, error) {
+	wanted := normalizeEmail(callerEmail)
 	for _, member := range roster {
-		if member.ID == crewMemberID {
+		if normalizeEmail(member.Email) == wanted {
 			return member, nil
 		}
 	}
 
-	return CrewRosterMember{}, ErrCrewMemberNotOnVehicle
+	return CrewRosterMember{}, ErrNotOnRoster
 }
 
-// checkPhoneLast4 compares the digits a member typed with the ones on their
-// roster row.
-//
-// Digits are extracted rather than the strings compared, because a roster
-// number may be written "+94 77 111 2233" or "077-111-2233" and a crew member
-// on the roadside should not have to guess which. This stops a mis-tap on a
-// teammate's name, not a determined impersonator — see the spec's non-goals.
-func checkPhoneLast4(onRoster, typed string) error {
-	rosterDigits, typedDigits := digitsOf(onRoster), digitsOf(typed)
-
-	if len(typedDigits) != phoneLast4Length || len(rosterDigits) < phoneLast4Length {
-		return ErrPhoneMismatch
-	}
-	if rosterDigits[len(rosterDigits)-phoneLast4Length:] != typedDigits {
-		return ErrPhoneMismatch
-	}
-
-	return nil
-}
-
-func digitsOf(s string) string {
-	var digits strings.Builder
-	for _, r := range s {
-		if r >= '0' && r <= '9' {
-			digits.WriteRune(r)
-		}
-	}
-
-	return digits.String()
+// normalizeEmail lowercases and trims an address so two spellings of the same
+// mailbox compare equal.
+func normalizeEmail(email string) string {
+	return strings.ToLower(strings.TrimSpace(email))
 }
 
 // State returns everything the micro app needs to decide which screen to show.
@@ -571,6 +549,14 @@ func (s *Service) waypointsFor(ctx context.Context, vehicleID string) ([]Waypoin
 // 60 km out.
 const maxPlausibleSpeedMPS = 60.0
 
+// sameInstantToleranceM is how far apart two fixes stamped the same instant may
+// be and still be believed: one second of travel at the ceiling above.
+//
+// Two reports of one position legitimately disagree by GPS jitter, so the
+// tolerance cannot be zero. A kilometre apart in no time is a teleport whatever
+// the timestamps claim.
+const sameInstantToleranceM = maxPlausibleSpeedMPS
+
 // isPlausibleMove reports whether the car could have travelled from its last
 // known fix to this one in the elapsed time.
 //
@@ -581,14 +567,21 @@ func isPlausibleMove(session Session, position LatLng, now time.Time) bool {
 		return true
 	}
 
+	metres := geo.HaversineMeters(*session.LastLat, *session.LastLng, position.Lat, position.Lng)
+
 	elapsed := now.Sub(*session.LastPingAt).Seconds()
 	if elapsed <= 0 {
-		// Same instant, or a clock that went backwards. Distance cannot be
-		// judged, so do not accuse the crew of teleporting.
-		return true
+		// Zero or negative elapsed time: two fixes stamped the same instant, or
+		// a clock that stepped backwards. This used to accept the fix on the
+		// grounds that distance cannot be judged without time — which is
+		// backwards. Nothing crosses real distance in no time, so "same instant"
+		// is the strongest evidence of a teleport there is, and the only
+		// credible fix is one that has barely moved.
+		//
+		// A genuine backwards clock step therefore costs one dropped fix out of
+		// a stream of them, which is the cheaper mistake.
+		return metres <= sameInstantToleranceM
 	}
-
-	metres := geo.HaversineMeters(*session.LastLat, *session.LastLng, position.Lat, position.Lng)
 
 	return metres/elapsed <= maxPlausibleSpeedMPS
 }

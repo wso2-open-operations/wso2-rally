@@ -49,8 +49,28 @@ func TestLoad_DefaultsAndValues(t *testing.T) {
 	require.Equal(t, "INFO", c.LogLevel)
 	require.Equal(t, "user:pass@tcp(localhost:3306)/rally", c.DBDsn)
 	require.Equal(t, "rally-admin", c.AdminRole)
+	// Unset ORGANIZER_ROLE falls back to the admin group rather than to "no
+	// group required": failing closed keeps the organizer surface shut on a
+	// deployment that has not thought about it yet.
+	require.Equal(t, c.AdminRole, c.OrganizerRole)
 	require.Equal(t, 12*time.Hour, c.TeamTokenTTL)
 	require.True(t, c.TokenValidatorEnabled)
+}
+
+func TestLoad_OrganizerRoleIsSeparableFromAdmin(t *testing.T) {
+	t.Setenv("DB_DSN", "user:pass@tcp(localhost:3306)/rally")
+	t.Setenv("TEAM_TOKEN_SECRET", "s3cret")
+	t.Setenv("ADMIN_ROLE", "rally-admin")
+	t.Setenv("ORGANIZER_ROLE", "rally-organizer")
+	// Verification is on unless opted out, so Load needs somewhere to verify
+	// against even when the test is only about role names.
+	t.Setenv("JWKS_ENDPOINT", "https://example.test/jwks")
+
+	c, err := Load()
+
+	require.NoError(t, err)
+	require.Equal(t, "rally-organizer", c.OrganizerRole)
+	require.Equal(t, "rally-admin", c.AdminRole)
 }
 
 func TestLoad_TokenValidatorRequiresJWKS(t *testing.T) {

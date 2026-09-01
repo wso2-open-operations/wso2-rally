@@ -67,6 +67,7 @@ func newRally(t *testing.T) *rally {
 		TeamTokenSecret: teamTokenSecret,
 		TeamTokenTTL:    time.Hour,
 		AdminRole:       adminRole,
+		OrganizerRole:   adminRole, // what Load() defaults to when ORGANIZER_ROLE is unset
 		LogLevel:        "ERROR",
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -109,6 +110,30 @@ func organizerToken(t *testing.T) string {
 		"email":  "organizer@wso2.com",
 		"groups": []string{adminRole},
 		"exp":    time.Now().Add(time.Hour).Unix(),
+	}).SignedString([]byte("not-verified-in-decode-only-mode"))
+	require.NoError(t, err)
+
+	return token
+}
+
+// asCrewMember sends a request with a super-app style Asgardeo token for one
+// crew member — no organizer group, because a participant has none. This is
+// what the embedded micro app presents at join time.
+func (r *rally) asCrewMember(method, path, body, email string) *httptest.ResponseRecorder {
+	r.t.Helper()
+
+	return r.do(method, path, body, superAppToken(r.t, email))
+}
+
+// superAppToken stands in for the token the Open Super App hands its micro app.
+func superAppToken(t *testing.T, email string) string {
+	t.Helper()
+
+	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"iss":   "https://api.asgardeo.io/t/wso2",
+		"sub":   email,
+		"email": email,
+		"exp":   time.Now().Add(time.Hour).Unix(),
 	}).SignedString([]byte("not-verified-in-decode-only-mode"))
 	require.NoError(t, err)
 
@@ -234,8 +259,8 @@ func TestHappyPath(t *testing.T) {
 		"contactNumber": "+94771234567",
 		"routeId": "`+route.ID+`",
 		"crew": [
-			{"name":"Nimal","phoneNumber":"0771234567","role":"navigator"},
-			{"name":"Sunil","phoneNumber":"0777654321","role":"node"}
+			{"name":"Nimal","email":"nimal@wso2.com","phoneNumber":"0771234567","role":"navigator"},
+			{"name":"Sunil","email":"sunil@wso2.com","phoneNumber":"0777654321","role":"node"}
 		]
 	}`), http.StatusCreated)
 	require.Len(t, vehicle.Crew, 2)
@@ -251,8 +276,8 @@ func TestHappyPath(t *testing.T) {
 		Crew []struct {
 			CrewMemberID string `json:"crewMemberId"`
 		} `json:"crew"`
-	}](t, r.do(http.MethodPost, "/sessions/join",
-		`{"vehicleId":"`+vehicle.ID+`","crewMemberId":"`+vehicle.Crew[0].ID+`","phoneLast4":"4567"}`, ""),
+	}](t, r.asCrewMember(http.MethodPost, "/sessions/join",
+		`{"vehicleId":"`+vehicle.ID+`"}`, "nimal@wso2.com"),
 		http.StatusCreated)
 	require.NotEmpty(t, joined.TeamToken)
 	require.Equal(t, "bound", joined.Session.Status)
@@ -269,20 +294,22 @@ func TestHappyPath(t *testing.T) {
 		Crew []struct {
 			CrewMemberID string `json:"crewMemberId"`
 		} `json:"crew"`
-	}](t, r.do(http.MethodPost, "/sessions/join",
-		`{"vehicleId":"`+vehicle.ID+`","crewMemberId":"`+vehicle.Crew[1].ID+`","phoneLast4":"4321"}`, ""),
+	}](t, r.asCrewMember(http.MethodPost, "/sessions/join",
+		`{"vehicleId":"`+vehicle.ID+`"}`, "sunil@wso2.com"),
 		http.StatusCreated)
 	require.Equal(t, joined.Session.ID, teammate.Session.ID, "both phones share one run")
 	require.Len(t, teammate.Crew, 2, "the second phone sees both members aboard")
 
-	// The last four digits are the whole of participant authentication, so a
-	// wrong code must not mint a token. It is a 403, and the body is the
-	// generic forbidden message — a probing client learns nothing about
-	// whether the vehicle, the member or the digits were wrong.
-	wrongCode := r.do(http.MethodPost, "/sessions/join",
-		`{"vehicleId":"`+vehicle.ID+`","crewMemberId":"`+vehicle.Crew[0].ID+`","phoneLast4":"0000"}`, "")
-	require.Equal(t, http.StatusForbidden, wrongCode.Code, "body: %s", wrongCode.Body.String())
-	require.NotContains(t, wrongCode.Body.String(), "roster")
+	// Being signed in proves who you are, not which car you are in: a real WSO2
+	// account that is not on this roster must not mint a token for it.
+	stranger := r.asCrewMember(http.MethodPost, "/sessions/join",
+		`{"vehicleId":"`+vehicle.ID+`"}`, "stranger@wso2.com")
+	require.Equal(t, http.StatusForbidden, stranger.Code, "body: %s", stranger.Body.String())
+
+	// And with no token at all it is a 401, not a 403 — joining is no longer
+	// the one unauthenticated write.
+	anonymous := r.do(http.MethodPost, "/sessions/join", `{"vehicleId":"`+vehicle.ID+`"}`, "")
+	require.Equal(t, http.StatusUnauthorized, anonymous.Code)
 
 	// --- The crew drives into the waypoint and the task unlocks. ---
 
@@ -393,23 +420,37 @@ func TestCrewCannotUseOrganizerEndpoints(t *testing.T) {
 			ID string `json:"id"`
 		} `json:"crew"`
 	}](t, r.asOrganizer(http.MethodPost, "/events/"+event.ID+"/vehicles",
-		`{"code":"PKT-001","teamName":"Team","crew":[{"name":"Nimal","phoneNumber":"0771234567"}]}`),
+		`{"code":"PKT-001","teamName":"Team","crew":[{"name":"Nimal","email":"nimal@wso2.com","phoneNumber":"0771234567"}]}`),
 		http.StatusCreated)
 
 	joined := decode[struct {
 		TeamToken string `json:"teamToken"`
-	}](t, r.do(http.MethodPost, "/sessions/join",
-		`{"vehicleId":"`+vehicle.ID+`","crewMemberId":"`+vehicle.Crew[0].ID+`","phoneLast4":"4567"}`, ""),
+	}](t, r.asCrewMember(http.MethodPost, "/sessions/join",
+		`{"vehicleId":"`+vehicle.ID+`"}`, "nimal@wso2.com"),
 		http.StatusCreated)
 	r.teamToken = joined.TeamToken
 
-	for _, path := range []string{
+	organizerOnly := []string{
 		"/events/" + event.ID + "/leaderboard",
 		"/events/" + event.ID + "/monitor",
 		"/users/me",
-	} {
-		t.Run(path, func(t *testing.T) {
+	}
+
+	// With the team token: the kind check catches it.
+	for _, path := range organizerOnly {
+		t.Run("team token "+path, func(t *testing.T) {
 			rec := r.asCrew(http.MethodGet, path, "")
+
+			require.Equal(t, http.StatusForbidden, rec.Code, "body: %s", rec.Body.String())
+		})
+	}
+
+	// With the *super app's* token, which is the one that used to get through:
+	// it is a valid Asgardeo token, so the middleware reads it as an organizer
+	// identity. Only the group check separates a crew member from staff.
+	for _, path := range organizerOnly {
+		t.Run("super app token "+path, func(t *testing.T) {
+			rec := r.do(http.MethodGet, path, "", superAppToken(t, "nimal@wso2.com"))
 
 			require.Equal(t, http.StatusForbidden, rec.Code, "body: %s", rec.Body.String())
 		})
@@ -432,11 +473,11 @@ func TestJoinBeforePublishIsRejected(t *testing.T) {
 			ID string `json:"id"`
 		} `json:"crew"`
 	}](t, r.asOrganizer(http.MethodPost, "/events/"+event.ID+"/vehicles",
-		`{"code":"PKT-001","teamName":"Team","crew":[{"name":"Nimal","phoneNumber":"0771234567"}]}`),
+		`{"code":"PKT-001","teamName":"Team","crew":[{"name":"Nimal","email":"nimal@wso2.com","phoneNumber":"0771234567"}]}`),
 		http.StatusCreated)
 
-	rec := r.do(http.MethodPost, "/sessions/join",
-		`{"vehicleId":"`+vehicle.ID+`","crewMemberId":"`+vehicle.Crew[0].ID+`","phoneLast4":"4567"}`, "")
+	rec := r.asCrewMember(http.MethodPost, "/sessions/join",
+		`{"vehicleId":"`+vehicle.ID+`"}`, "nimal@wso2.com")
 
 	require.Equal(t, http.StatusConflict, rec.Code, "body: %s", rec.Body.String())
 }
@@ -455,8 +496,8 @@ func TestVehicleCSVRoundTrip(t *testing.T) {
 	// Crew entries are "Name:phone": the number is mandatory because its last
 	// four digits are how that member joins their car.
 	body, contentType := csvUpload(t, "code,team_name,vehicle_type,contact_number,route_name,crew_names\n"+
-		"PKT-001,Packet Pioneers,SUV,+94771234567,Inland,Nimal:0771234567|Sunil:0777654321\n"+
-		"PKT-002,Byte Brigade,Van,+94777654321,Inland,Kamala:0779876543\n")
+		"PKT-001,Packet Pioneers,SUV,+94771234567,Inland,Nimal:nimal@wso2.com:0771234567|Sunil:sunil@wso2.com:0777654321\n"+
+		"PKT-002,Byte Brigade,Van,+94777654321,Inland,Kamala:kamala@wso2.com:0779876543\n")
 
 	req := httptest.NewRequest(http.MethodPost, "/events/"+event.ID+"/vehicles/import", body)
 	req.Header.Set("Authorization", "Bearer "+r.organizer)
@@ -472,7 +513,7 @@ func TestVehicleCSVRoundTrip(t *testing.T) {
 	exported := r.asOrganizer(http.MethodGet, "/events/"+event.ID+"/vehicles/export", "")
 	require.Equal(t, http.StatusOK, exported.Code)
 	require.Contains(t, exported.Body.String(),
-		"PKT-001,Packet Pioneers,SUV,+94771234567,Inland,Nimal:0771234567|Sunil:0777654321")
+		"PKT-001,Packet Pioneers,SUV,+94771234567,Inland,Nimal:nimal@wso2.com:0771234567|Sunil:sunil@wso2.com:0777654321")
 }
 
 // csvUpload builds the multipart body the web app's import control sends.

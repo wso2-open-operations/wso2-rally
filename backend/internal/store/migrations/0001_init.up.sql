@@ -103,14 +103,24 @@ CREATE TABLE crew_member (
   -- number. Stored whole so the roster stays useful to organizers, but never
   -- returned to a phone: only the last four are ever compared, server-side.
   --
-  -- NOT NULL with no DEFAULT on purpose. A member without a number could never
-  -- prove who they are, so strict mode rejecting the INSERT is better than
-  -- seeding a roster that looks provisioned and cannot be joined.
+  -- The address the super app authenticates this member by. The in-car app is
+  -- embedded in the WSO2 Open Super App, so a joining phone presents an
+  -- Asgardeo token and POST /sessions/join matches its email claim against
+  -- this. NOT NULL with no DEFAULT on purpose: a member without one could
+  -- never join, so strict mode rejecting the INSERT is better than seeding a
+  -- roster that looks provisioned and strands someone at the start line.
+  -- Unique per vehicle, not globally — one person may appear on two events'
+  -- rosters, but never twice in the same car, or a join could not tell which
+  -- row is calling.
+  email          VARCHAR(320) NOT NULL,
+  -- Required too, but only so an organizer can call a car that goes quiet. It
+  -- stopped being a credential when the super app took over identity.
   phone_number   VARCHAR(40)  NOT NULL,
   -- Roster metadata: who is expected to navigate. It confers nothing at run
   -- time — every member's phone has the same powers once joined.
   role           ENUM('navigator','node') NOT NULL DEFAULT 'node',
   origin_country VARCHAR(80)  NULL,
+  UNIQUE KEY uq_crew_member_email (vehicle_id, email),
   KEY idx_crew_vehicle (vehicle_id),
   CONSTRAINT fk_crew_vehicle FOREIGN KEY (vehicle_id) REFERENCES vehicle (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -121,14 +131,23 @@ CREATE TABLE team_session (
   vehicle_id          CHAR(32)  NOT NULL,
   bound_at            TIMESTAMP NULL,
   started_at          TIMESTAMP NULL,
-  finished_at         TIMESTAMP NULL,
+  -- TIMESTAMP(3), not TIMESTAMP: the leaderboard breaks a tie on score by
+  -- earliest finish, and a bare TIMESTAMP has no fractional seconds and
+  -- *rounds* on write — two crews arriving 300 ms apart would be stored as a
+  -- dead heat.
+  finished_at         TIMESTAMP(3) NULL,
   current_waypoint_id CHAR(32)  NULL,
   total_score         INT       NOT NULL DEFAULT 0,
   status              ENUM('bound','active','finished') NOT NULL DEFAULT 'bound',
   -- Last reported position, kept for the organizer live monitor (A6).
   last_lat            DOUBLE    NULL,
   last_lng            DOUBLE    NULL,
-  last_ping_at        TIMESTAMP NULL,
+  -- TIMESTAMP(3) for the same reason as finished_at, and here it is worse than
+  -- a cosmetic loss: the anti-teleport check divides the distance since the
+  -- last fix by the time since it. Rounding can put this value up to half a
+  -- second in the *future*, making the elapsed time negative — which the guard
+  -- reads as a backwards clock and waves the jump through.
+  last_ping_at        TIMESTAMP(3) NULL,
   -- One live session per vehicle: 1 while the session is live, NULL once it is
   -- finished. MySQL treats NULLs as distinct in a unique index, so a vehicle
   -- can hold at most one bound-or-active session while still accumulating any

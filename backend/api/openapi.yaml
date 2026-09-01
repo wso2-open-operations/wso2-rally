@@ -10,7 +10,7 @@ info:
 
     - **Organizers** authenticate with an Asgardeo id token and set the rally
       up, then watch it run.
-    - **Crews** authenticate with a team token minted by `POST /sessions/bind`,
+    - **Crews** authenticate with a team token minted by `POST /sessions/join`,
       the only unauthenticated write. There is no participant login: binding a
       vehicle is what authenticates a phone, and the one-active-phone rule
       means a second device is rejected with `409`.
@@ -853,35 +853,46 @@ paths:
                     items: { $ref: "#/components/schemas/DebriefVideo" }
                   totalCount: { type: integer }
 
-  /sessions/bind:
+  /sessions/join:
     post:
       tags: [In-car]
-      summary: Bind one phone to a vehicle and receive a team token.
+      summary: Join a vehicle's run and receive a team token.
       description: |
-        The zero-facilitator start: no one hands out credentials, the crew picks
-        their vehicle. The event must be published.
+        The one endpoint that takes an **organizer-issued Asgardeo token** and
+        returns a **team token**. Everything else under `/sessions/me/*` takes
+        the team token.
 
-        **One active phone per vehicle.** A second device binding the same
-        vehicle receives `409`; the rule is enforced by a unique index, so two
-        phones racing cannot both win.
-      security: []
+        The in-car app is embedded in the WSO2 Open Super App, so the phone
+        already holds an Asgardeo access token minted for the rally's
+        `clientId` — it asks the host for one over the native bridge. This
+        endpoint therefore asks a crew member only *which car they are in*: the
+        person is resolved from the token's `email` claim, matched
+        case-insensitively against `crew_member.email` on that vehicle's roster.
+        There is no name picker and no phone-digit check; both existed only
+        while there was no identity provider.
+
+        Mounted under authentication but **outside** the organizer role gate:
+        the caller is a participant and carries no organizer group. The roster
+        decides, not a role.
+
+        **Every phone in the car joins the same session.** The first to arrive
+        creates it and the rest attach — each gets its own device row and its
+        own token, and `crew` is who else is already aboard. Re-joining is an
+        upsert, so a rebooted phone lands back on its own row.
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [vehicleId, crewMemberIds]
+              required: [vehicleId]
               properties:
-                vehicleId: { type: string }
-                crewMemberIds:
-                  type: array
-                  minItems: 1
-                  items: { type: string }
-                  description: Chosen from the vehicle's own roster.
+                vehicleId:
+                  type: string
+                  description: The car this person says they are in.
       responses:
         "201":
-          description: Bound.
+          description: Joined.
           content:
             application/json:
               schema:
@@ -890,9 +901,17 @@ paths:
                   teamToken: { type: string }
                   session: { $ref: "#/components/schemas/Session" }
         "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403":
+          description: >
+            The signed-in caller is not on that vehicle's roster — they picked
+            the wrong car, or their address is missing from it.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409":
-          description: The vehicle is already bound, or the event is not published.
+          description: The event is not published yet.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -1069,7 +1088,7 @@ components:
       bearerFormat: JWT
       description: |
         An Asgardeo id token for organizers, or the team token from
-        `POST /sessions/bind` for crews. The service tells them apart by issuer.
+        `POST /sessions/join` for crews. The service tells them apart by issuer.
 
   parameters:
     EventId:
@@ -1298,6 +1317,15 @@ components:
       properties:
         id: { type: string }
         name: { type: string }
+        email:
+          type: string
+          format: email
+          description: >
+            The WSO2 address the super app signs this member in with, and what
+            POST /sessions/join matches its token against.
+        phoneNumber:
+          type: string
+          description: So an organizer can call a car that goes quiet.
         role: { type: string, enum: [navigator, node] }
         originCountry: { type: string }
 
@@ -1329,9 +1357,18 @@ components:
           type: array
           items:
             type: object
-            required: [name]
+            required: [name, email, phoneNumber]
             properties:
               name: { type: string }
+              email:
+                type: string
+                format: email
+                description: >
+                  Required. A member without one can never join, because it is
+                  what the in-car app is recognised by.
+              phoneNumber:
+                type: string
+                description: Required, at least 4 digits, so a silent car can be called.
               role: { type: string, enum: [navigator, node] }
               originCountry: { type: string }
 

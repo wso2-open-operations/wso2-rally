@@ -39,8 +39,8 @@ const (
 	crewB         = "crew-b"
 	// The last four digits of each roster number below, which is what a member
 	// types on the join screen.
-	crewALast4 = "2233"
-	crewBLast4 = "8877"
+	crewAEmail = "nimal@wso2.com"
+	crewBEmail = "ayesha@wso2.com"
 )
 
 // fakeRepo is an in-memory Repo. It enforces the one-live-session rule and the
@@ -89,8 +89,8 @@ func newFakeRepo() *fakeRepo {
 		routeID: testRouteID,
 		devices: map[string]map[string]Device{},
 		crew: []CrewRosterMember{
-			{ID: crewA, Name: "Nimal Perera", PhoneNumber: "+94 77 111 2233", Role: "navigator"},
-			{ID: crewB, Name: "Ayesha Fernando", PhoneNumber: "071-999-8877", Role: "node"},
+			{ID: crewA, Name: "Nimal Perera", Email: crewAEmail, PhoneNumber: "+94 77 111 2233", Role: "navigator"},
+			{ID: crewB, Name: "Ayesha Fernando", Email: crewBEmail, PhoneNumber: "071-999-8877", Role: "node"},
 		},
 		waypoints: []WaypointGeo{
 			waypointAt("wp-1", 0, atKandy, WaypointTask{ID: "task-1", Type: tasks.TypeInputSelect}),
@@ -350,12 +350,13 @@ func newService(t *testing.T) (*Service, *fakeRepo, *recordingAlerts, *[]broadca
 	return svc, repo, alertRaiser, &sent
 }
 
-// joinAs puts one member's phone into the car and returns the result.
-func joinAs(t *testing.T, svc *Service, crewMemberID, last4 string) JoinResult {
+// joinAs puts one member's phone into the car and returns the result. The email
+// is what the super app authenticated, so it is all a phone presents.
+func joinAs(t *testing.T, svc *Service, email string) JoinResult {
 	t.Helper()
 
 	result, err := svc.Join(context.Background(), JoinInput{
-		VehicleID: testVehicleID, CrewMemberID: crewMemberID, PhoneLast4: last4,
+		VehicleID: testVehicleID, CallerEmail: email,
 	})
 	require.NoError(t, err)
 	require.NotEmpty(t, result.Token)
@@ -367,13 +368,13 @@ func joinAs(t *testing.T, svc *Service, crewMemberID, last4 string) JoinResult {
 func bindOnce(t *testing.T, svc *Service) Session {
 	t.Helper()
 
-	return joinAs(t, svc, crewA, crewALast4).Session
+	return joinAs(t, svc, crewAEmail).Session
 }
 
 func TestService_Join_FirstMemberCreatesTheSession(t *testing.T) {
 	svc, _, _, _ := newService(t)
 
-	result := joinAs(t, svc, crewA, crewALast4)
+	result := joinAs(t, svc, crewAEmail)
 
 	require.Len(t, result.Session.ID, 32)
 	require.Equal(t, StatusBound, result.Session.Status)
@@ -390,8 +391,8 @@ func TestService_Join_FirstMemberCreatesTheSession(t *testing.T) {
 func TestService_Join_SecondMemberJoinsTheSameSession(t *testing.T) {
 	svc, _, _, _ := newService(t)
 
-	first := joinAs(t, svc, crewA, crewALast4)
-	second := joinAs(t, svc, crewB, crewBLast4)
+	first := joinAs(t, svc, crewAEmail)
+	second := joinAs(t, svc, crewBEmail)
 
 	require.Equal(t, first.Session.ID, second.Session.ID, "the crew must share one run")
 	require.NotEqual(t, first.Device.ID, second.Device.ID, "but not one device")
@@ -404,58 +405,47 @@ func TestService_Join_SecondMemberJoinsTheSameSession(t *testing.T) {
 func TestService_Join_RejoinIsIdempotent(t *testing.T) {
 	svc, _, _, _ := newService(t)
 
-	first := joinAs(t, svc, crewA, crewALast4)
-	again := joinAs(t, svc, crewA, crewALast4)
+	first := joinAs(t, svc, crewAEmail)
+	again := joinAs(t, svc, crewAEmail)
 
 	require.Equal(t, first.Device.ID, again.Device.ID)
 	require.Equal(t, first.Session.ID, again.Session.ID)
 	require.Len(t, again.Crew, 1)
 }
 
-func TestService_Join_RejectsWrongLastFour(t *testing.T) {
+// The whole point of embedding: the phone says which car, the super app has
+// already said who. The roster is what connects the two.
+func TestService_Join_ResolvesTheMemberFromTheCallerEmail(t *testing.T) {
 	svc, _, _, _ := newService(t)
 
-	// crewB's digits, presented for crewA.
+	result := joinAs(t, svc, crewBEmail)
+
+	require.Equal(t, crewB, result.Device.CrewMemberID)
+	require.Equal(t, "Ayesha Fernando", result.Device.CrewMemberName)
+}
+
+// Being signed in proves who you are, not which car you are in. Picking the
+// wrong vehicle must not put you in a crew you are not on.
+func TestService_Join_RejectsACallerWhoIsNotOnThatRoster(t *testing.T) {
+	svc, _, _, _ := newService(t)
+
 	_, err := svc.Join(context.Background(), JoinInput{
-		VehicleID: testVehicleID, CrewMemberID: crewA, PhoneLast4: crewBLast4,
+		VehicleID: testVehicleID, CallerEmail: "stranger@wso2.com",
 	})
 
-	require.ErrorIs(t, err, ErrPhoneMismatch)
+	require.ErrorIs(t, err, ErrNotOnRoster)
 	require.ErrorIs(t, err, apperr.ErrForbidden)
 }
 
-// Roster numbers are written inconsistently — "+94 77 111 2233" here,
-// "071-999-8877" there — and a crew member on the roadside types four digits.
-func TestService_Join_IgnoresRosterNumberFormatting(t *testing.T) {
+// Asgardeo may hand back a differently-cased address than the organizer typed
+// into the roster, and locking a crew member out over capitalisation on rally
+// morning would be indefensible.
+func TestService_Join_MatchesTheEmailCaseInsensitively(t *testing.T) {
 	svc, _, _, _ := newService(t)
 
-	require.NotPanics(t, func() { joinAs(t, svc, crewA, crewALast4) })
-	require.NotPanics(t, func() { joinAs(t, svc, crewB, crewBLast4) })
-}
+	result := joinAs(t, svc, "  Nimal@WSO2.com ")
 
-func TestService_Join_RejectsMalformedLastFour(t *testing.T) {
-	for _, last4 := range []string{"", "22", "22334", "abcd"} {
-		t.Run("last4="+last4, func(t *testing.T) {
-			svc, _, _, _ := newService(t)
-
-			_, err := svc.Join(context.Background(), JoinInput{
-				VehicleID: testVehicleID, CrewMemberID: crewA, PhoneLast4: last4,
-			})
-
-			require.ErrorIs(t, err, ErrPhoneMismatch)
-		})
-	}
-}
-
-func TestService_Join_RejectsCrewMemberFromAnotherVehicle(t *testing.T) {
-	svc, _, _, _ := newService(t)
-
-	_, err := svc.Join(context.Background(), JoinInput{
-		VehicleID: testVehicleID, CrewMemberID: "someone-else", PhoneLast4: crewALast4,
-	})
-
-	require.ErrorIs(t, err, ErrCrewMemberNotOnVehicle)
-	require.ErrorIs(t, err, apperr.ErrNotFound)
+	require.Equal(t, crewA, result.Device.CrewMemberID)
 }
 
 func TestService_Join_UnknownVehicle(t *testing.T) {
@@ -463,7 +453,7 @@ func TestService_Join_UnknownVehicle(t *testing.T) {
 	repo.noVehicle = true
 
 	_, err := svc.Join(context.Background(), JoinInput{
-		VehicleID: testVehicleID, CrewMemberID: crewA, PhoneLast4: crewALast4,
+		VehicleID: testVehicleID, CallerEmail: crewAEmail,
 	})
 
 	require.ErrorIs(t, err, ErrVehicleNotFound)
@@ -474,16 +464,16 @@ func TestService_Join_RejectsUnpublishedEvent(t *testing.T) {
 	repo.event.Status = "setup"
 
 	_, err := svc.Join(context.Background(), JoinInput{
-		VehicleID: testVehicleID, CrewMemberID: crewA, PhoneLast4: crewALast4,
+		VehicleID: testVehicleID, CallerEmail: crewAEmail,
 	})
 
 	require.ErrorIs(t, err, ErrEventNotActive)
 }
 
-func TestService_Join_RequiresVehicleAndMember(t *testing.T) {
+func TestService_Join_RequiresVehicleAndCaller(t *testing.T) {
 	tests := map[string]JoinInput{
-		"no vehicle": {CrewMemberID: crewA, PhoneLast4: crewALast4},
-		"no member":  {VehicleID: testVehicleID, PhoneLast4: crewALast4},
+		"no vehicle":      {CallerEmail: crewAEmail},
+		"no caller email": {VehicleID: testVehicleID},
 	}
 	for name, in := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -768,7 +758,7 @@ func TestService_Ping_FirstFixIsAlwaysPlausible(t *testing.T) {
 // role. This is what lets a crew see whether anyone is still covering the car.
 func TestService_Ping_MarksThePhoneAsSharing(t *testing.T) {
 	svc, _, _, _ := newService(t)
-	joined := joinAs(t, svc, crewA, crewALast4)
+	joined := joinAs(t, svc, crewAEmail)
 
 	_, err := svc.Ping(context.Background(), joined.Session.ID, joined.Device.ID, atKandy)
 	require.NoError(t, err)
@@ -776,4 +766,48 @@ func TestService_Ping_MarksThePhoneAsSharing(t *testing.T) {
 	state, err := svc.State(context.Background(), joined.Session.ID, joined.Device.ID)
 	require.NoError(t, err)
 	require.True(t, state.You.IsSharing(time.Now().UTC()), "the phone that pinged is sharing")
+}
+
+// isPlausibleMove used to wave a fix through whenever the elapsed time was zero
+// or negative, on the reasoning that distance cannot be judged without time.
+// That is backwards: nothing crosses real distance in no time, so "same
+// instant" is the *strongest* evidence of a teleport, not an excuse to accept
+// one. The old escape hatch also made the ping test above flaky — two pings
+// inside one clock tick would finish the run.
+func TestIsPlausibleMove_SameInstantAcceptsOnlyAStandstill(t *testing.T) {
+	now := time.Date(2027, 2, 13, 9, 30, 0, 0, time.UTC)
+	lat, lng := 6.9000, 79.9200
+	atStartLine := Session{LastLat: &lat, LastLng: &lng, LastPingAt: &now}
+
+	tests := map[string]struct {
+		position LatLng
+		want     bool
+	}{
+		// Two reports of one position, disagreeing by GPS jitter.
+		"a metre away":      {LatLng{Lat: 6.90001, Lng: 79.92001}, true},
+		"the finish line":   {LatLng{Lat: 6.8480, Lng: 79.9280}, false},
+		"a kilometre north": {LatLng{Lat: 6.9090, Lng: 79.9200}, false},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			require.Equal(t, tt.want, isPlausibleMove(atStartLine, tt.position, now))
+		})
+	}
+}
+
+// A clock that steps backwards must not turn into a licence to teleport either.
+func TestIsPlausibleMove_BackwardsClockStillRejectsAJump(t *testing.T) {
+	pinged := time.Date(2027, 2, 13, 9, 30, 0, 0, time.UTC)
+	lat, lng := 6.9000, 79.9200
+	session := Session{LastLat: &lat, LastLng: &lng, LastPingAt: &pinged}
+
+	earlier := pinged.Add(-2 * time.Second)
+
+	require.False(t, isPlausibleMove(session, LatLng{Lat: 6.8480, Lng: 79.9280}, earlier))
+}
+
+// The first fix of a run has nothing to compare against and must be accepted,
+// or no rally could ever start.
+func TestIsPlausibleMove_FirstFixIsAlwaysAccepted(t *testing.T) {
+	require.True(t, isPlausibleMove(Session{}, LatLng{Lat: 6.9, Lng: 79.92}, time.Now()))
 }

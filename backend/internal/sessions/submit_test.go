@@ -72,8 +72,8 @@ func TestService_SubmitTask_FirstPhoneWins(t *testing.T) {
 // first would hand the car a wrong answer's score.
 func TestService_SubmitTask_SecondPhoneGetsConflictNamingTheWinner(t *testing.T) {
 	svc, repo, _, _ := newService(t)
-	session := joinAs(t, svc, crewA, crewALast4).Session
-	joinAs(t, svc, crewB, crewBLast4)
+	session := joinAs(t, svc, crewAEmail).Session
+	joinAs(t, svc, crewBEmail)
 	ctx := context.Background()
 	_, err := svc.SubmitTask(ctx, session.ID, crewA, "task-1", json.RawMessage(`{"answer":"API Integration"}`))
 	require.NoError(t, err)

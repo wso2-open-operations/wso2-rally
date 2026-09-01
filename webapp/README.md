@@ -152,7 +152,7 @@ pnpm dev                          # dev server on :3000, HMR
 pnpm build                        # tsc -b && vite build → dist/
 pnpm preview                      # serve the built dist/ locally
 pnpm test                         # vitest, watch mode
-pnpm exec vitest run              # vitest, single run (115 tests)
+pnpm exec vitest run              # vitest, single run (135 tests)
 pnpm exec vitest run src/config   # one directory
 pnpm lint                         # eslint
 ```
@@ -178,9 +178,10 @@ The Choreo gateway owns TLS, CORS and organizer token validation.
 ## Architecture notes
 
 - **`useAuthApiClient`** is the single path to the backend. It prefixes
-  `RALLY_BACKEND_BASE_URL`, sends both `Authorization: Bearer <idToken>` and
-  `x-user-id-token: <idToken>`, and raises any non-2xx as an `ApiError` carrying
-  the backend's `{"message": …}`. Callers never check `response.ok`.
+  `RALLY_BACKEND_BASE_URL`, sends `Authorization: Bearer <idToken>`, and raises
+  any non-2xx as an `ApiError` carrying the backend's `{"message": …}`. Callers
+  never check `response.ok`. The token goes in that one header only — see
+  `CLAUDE.md` on why `x-user-id-token` was dropped.
 - **Query keys** come from `ApiQueryKeys` in `constants/apiConstants.ts`, so a
   mutation invalidates exactly what it touched.
 - **Path aliases** must be declared in *both* `vite.config.ts` and
@@ -192,6 +193,16 @@ The Choreo gateway owns TLS, CORS and organizer token validation.
   design spec. Leaflet measures the DOM, which jsdom does not lay out, so
   `vitest.setup.ts` stubs the whole module — add a stub there when a page starts
   using a react-leaflet component the mock does not list yet.
+  `LiveMap` and `RouteMap` draw with `CircleMarker` (plain SVG) rather than
+  `Marker`, whose default icon is a PNG resolved from the `leaflet` package —
+  fine here, where Vite bundles it and the app is served over HTTP, but a
+  broken-image trap in the micro app, which loads from `file://`. `MapPicker` is
+  the one `Marker` user and stays desktop-only.
+- **A5's crew rows need a WSO2 email.** The in-car app is embedded in the super
+  app, which authenticates the person, and `POST /sessions/join` matches that
+  identity against `crew_member.email`. A roster row without one is a crew member
+  who cannot start, so the form refuses it — and refuses two members of one car
+  sharing an address, which would make the join ambiguous.
 - **A3 and A5 send whole sets, never deltas.** Reordering posts the full
   permutation, attaching a task posts the waypoint's complete task list, and
   saving a vehicle posts its complete crew — those endpoints replace rather than
@@ -207,6 +218,16 @@ The Choreo gateway owns TLS, CORS and organizer token validation.
   it in an effect dependency array rebuilds on each render — for the socket that
   was a reconnect storm. Keep it in a ref, synced in an effect (never during
   render; the lint rule enforces that).
+- **Place lookup is the one third-party call, and it uses plain `fetch`.**
+  A2 geocodes through `utils/geocoding.ts` against Nominatim
+  (`RALLY_GEOCODE_URL`, keyless like the tiles). It deliberately does **not** go
+  through `useAuthApiClient`: that attaches the organizer's id token to every
+  request, and pointing it at someone else's server would hand them our
+  credential. Two more constraints come from the provider's usage policy —
+  search fires on Enter or the button, **never as-you-type** (autocomplete is
+  forbidden), and the module enforces one request per second whatever the UI
+  does. A failed lookup resolves to null and the organizer drops the pin by
+  hand; the form never breaks over it.
 - **The CSV export is a `fetch`, not a link.** The endpoint needs the bearer
   token, and a browser-initiated navigation (`<a href>`, `window.open`) would
   arrive unauthenticated. It goes through `useAuthApiClient` and reaches the

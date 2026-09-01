@@ -14,17 +14,22 @@
 // specific language governing permissions and limitations
 // under the License.
 
-import { useCallback, useState, type FormEvent, type JSX } from "react";
+import { useCallback, useState, type FormEvent, type JSX, type KeyboardEvent } from "react";
 import {
   Box,
   Button,
   CircularProgress,
   Divider,
+  IconButton,
+  InputAdornment,
   Paper,
   TextField,
+  Tooltip,
   Typography,
 } from "@wso2/oxygen-ui";
+import { Search } from "@wso2/oxygen-ui-icons-react";
 import MapPicker from "@components/map-picker/MapPicker";
+import { reverseGeocode, searchPlace } from "@utils/geocoding";
 import {
   EMPTY_BOUNDARY,
   isBoundaryPlaced,
@@ -128,6 +133,104 @@ export default function EventForm({
     [],
   );
 
+  // Which boundary is mid-lookup, and whether the last one found nothing. Keyed
+  // by boundary so searching the start never blocks or mislabels the end.
+  const [locating, setLocating] = useState<"start" | "end" | null>(null);
+  const [notFound, setNotFound] = useState<"start" | "end" | null>(null);
+
+  /**
+   * Moves a boundary's pin to whatever the organizer typed.
+   *
+   * On Enter, never on keystroke: the geocoder's usage policy forbids
+   * autocomplete, and a request per character would breach it in a word.
+   */
+  const findTypedPlace = useCallback(
+    async (which: "start" | "end", query: string) => {
+      if (query.trim() === "") {
+        return;
+      }
+
+      setLocating(which);
+      setNotFound(null);
+      const found = await searchPlace(query);
+      setLocating(null);
+
+      if (!found) {
+        setNotFound(which);
+
+        return;
+      }
+
+      // The canonical short name replaces what was typed, so the field confirms
+      // *which* "Bandaragama" the pin landed on.
+      setBoundary(which, { lat: found.lat, lng: found.lng, label: found.label });
+    },
+    [setBoundary],
+  );
+
+  /**
+   * Places a boundary where the organizer clicked and names it.
+   *
+   * The coordinates are the authoritative part and are set immediately; the name
+   * follows when the geocoder answers, so a slow or unreachable provider still
+   * leaves a usable pin. A point with no name keeps whatever label was there.
+   */
+  const placeAndName = useCallback(
+    async (which: "start" | "end", position: { lat: number; lng: number }) => {
+      setBoundary(which, position);
+      setNotFound(null);
+
+      setLocating(which);
+      const name = await reverseGeocode(position.lat, position.lng);
+      setLocating(null);
+
+      if (name) {
+        setBoundary(which, { label: name });
+      }
+    },
+    [setBoundary],
+  );
+
+  /** The shared adornment + helper text for both location fields. */
+  const locationFieldProps = (which: "start" | "end") => ({
+    disabled: isReadOnly,
+    helperText:
+      notFound === which
+        ? "No place found by that name — click the map to place the pin instead."
+        : "Type a place and press Enter, or click the map.",
+    error: notFound === which,
+    onKeyDown: (keyEvent: KeyboardEvent<HTMLDivElement>) => {
+      if (keyEvent.key === "Enter") {
+        // The form's submit is a save; Enter here means "find this".
+        keyEvent.preventDefault();
+        void findTypedPlace(which, form[which].label);
+      }
+    },
+    InputProps: {
+      endAdornment: (
+        <InputAdornment position="end">
+          {locating === which ? (
+            <CircularProgress size={16} />
+          ) : (
+            <Tooltip title="Find this place">
+              <IconButton
+                // Not "…start location…": that would collide with the field's
+                // own label and make getByLabelText ambiguous.
+                aria-label={`Find the ${which} point on the map`}
+                disabled={isReadOnly || form[which].label.trim() === ""}
+                edge="end"
+                onClick={() => void findTypedPlace(which, form[which].label)}
+                size="small"
+              >
+                <Search size={16} />
+              </IconButton>
+            </Tooltip>
+          )}
+        </InputAdornment>
+      ),
+    },
+  });
+
   const handleSubmit = (submitEvent: FormEvent): void => {
     submitEvent.preventDefault();
     const found = validate(form);
@@ -207,7 +310,7 @@ export default function EventForm({
 
           <Box sx={{ display: "flex", gap: 1.5 }}>
             <TextField
-              disabled={isReadOnly}
+              {...locationFieldProps("start")}
               label="Start location"
               onChange={(e) => setBoundary("start", { label: e.target.value })}
               size="small"
@@ -229,7 +332,7 @@ export default function EventForm({
           </Box>
           <Box sx={{ display: "flex", gap: 1.5 }}>
             <TextField
-              disabled={isReadOnly}
+              {...locationFieldProps("end")}
               label="End location"
               onChange={(e) => setBoundary("end", { label: e.target.value })}
               size="small"
@@ -256,7 +359,7 @@ export default function EventForm({
             label="Start grid geofence"
             lat={form.start.lat}
             lng={form.start.lng}
-            onChange={(position) => setBoundary("start", position)}
+            onChange={(position) => void placeAndName("start", position)}
             radiusM={form.start.radiusM}
             readOnly={isReadOnly}
           />
@@ -264,7 +367,7 @@ export default function EventForm({
             label="Arrival geofence"
             lat={form.end.lat}
             lng={form.end.lng}
-            onChange={(position) => setBoundary("end", position)}
+            onChange={(position) => void placeAndName("end", position)}
             radiusM={form.end.radiusM}
             readOnly={isReadOnly}
           />

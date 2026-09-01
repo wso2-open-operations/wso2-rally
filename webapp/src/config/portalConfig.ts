@@ -32,6 +32,7 @@ export interface RallyWindowConfig {
   RALLY_MAP_DEFAULT_LAT?: number;
   RALLY_MAP_DEFAULT_LNG?: number;
   RALLY_MAP_DEFAULT_ZOOM?: number;
+  RALLY_GEOCODE_URL?: string;
   RALLY_THEME?: string;
   RALLY_LOG_LEVEL?: string;
 }

@@ -60,7 +60,6 @@ const buildRequestHeaders = (
 ): Headers => {
   const headers = new Headers(options?.headers);
   headers.set("Authorization", `Bearer ${token}`);
-  headers.set("x-user-id-token", token);
   if (!headers.has("Accept")) {
     headers.set("Accept", "application/json");
   }
