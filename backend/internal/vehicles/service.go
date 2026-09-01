@@ -34,7 +34,11 @@ type Repo interface {
 	CreateMany(ctx context.Context, list []Vehicle) error
 	Get(ctx context.Context, id string) (Vehicle, error)
 	Update(ctx context.Context, v Vehicle) error
-	Search(ctx context.Context, eventID string, page httpx.Page) ([]Vehicle, int, error)
+	Delete(ctx context.Context, id string) error
+	// HasRun reports whether the vehicle has any rally session, live or
+	// finished. A vehicle that has one cannot be deleted.
+	HasRun(ctx context.Context, vehicleID string) (bool, error)
+	Search(ctx context.Context, eventID string, filter SearchFilter, page httpx.Page) ([]Vehicle, int, error)
 	// ListByEvent returns every vehicle of an event, for CSV export.
 	ListByEvent(ctx context.Context, eventID string) ([]Vehicle, error)
 	SetStatus(ctx context.Context, vehicleID string, status Status) error
@@ -117,18 +121,50 @@ func (s *Service) Update(ctx context.Context, id string, in UpdateVehicleInput) 
 	return vehicle, nil
 }
 
-// Search returns a page of an event's vehicles plus the unpaged total.
-func (s *Service) Search(ctx context.Context, eventID string, page httpx.Page) ([]Vehicle, int, error) {
+// Search returns a page of an event's vehicles plus the unpaged total. The
+// total counts what the filter matched, not the whole fleet, so a filtered
+// table pages through its own results.
+func (s *Service) Search(
+	ctx context.Context, eventID string, filter SearchFilter, page httpx.Page,
+) ([]Vehicle, int, error) {
 	if eventID == "" {
 		return nil, 0, apperr.Validationf("event id is required")
 	}
 
-	found, total, err := s.repo.Search(ctx, eventID, page)
+	filter.Query = strings.TrimSpace(filter.Query)
+
+	found, total, err := s.repo.Search(ctx, eventID, filter, page)
 	if err != nil {
 		return nil, 0, fmt.Errorf("search vehicles of event %s: %w", eventID, err)
 	}
 
 	return found, total, nil
+}
+
+// Delete removes a vehicle that should not have been provisioned.
+//
+// It refuses once the vehicle has run. Every session, submission, score and
+// alert hangs off the vehicle row by a cascading foreign key, so deleting one
+// mid- or post-rally would quietly erase a result instead of fixing a typo —
+// retire the car by other means and keep its history.
+func (s *Service) Delete(ctx context.Context, vehicleID string) error {
+	if _, err := s.repo.Get(ctx, vehicleID); err != nil {
+		return err
+	}
+
+	hasRun, err := s.repo.HasRun(ctx, vehicleID)
+	if err != nil {
+		return fmt.Errorf("check sessions of vehicle %s: %w", vehicleID, err)
+	}
+	if hasRun {
+		return ErrHasRun
+	}
+
+	if err := s.repo.Delete(ctx, vehicleID); err != nil {
+		return fmt.Errorf("delete vehicle %s: %w", vehicleID, err)
+	}
+
+	return nil
 }
 
 // SetStatus records a vehicle's health. The alerts service calls it when a

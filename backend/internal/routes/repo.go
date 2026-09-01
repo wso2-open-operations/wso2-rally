@@ -298,6 +298,39 @@ func (r *sqlRepo) ReorderWaypoints(ctx context.Context, routeID string, orderedI
 	})
 }
 
+// DeleteWaypoint removes a waypoint and closes the gap it leaves in the route's
+// display_order, both inside one transaction so no reader sees the sequence
+// with a hole in it. Attachments and visit rows go with it by cascade;
+// session.current_waypoint_id and task_submission.waypoint_id are nulled.
+func (r *sqlRepo) DeleteWaypoint(ctx context.Context, routeID, waypointID string) error {
+	return store.InTx(ctx, r.db, func(tx *sql.Tx) error {
+		result, err := tx.ExecContext(ctx, "DELETE FROM waypoint WHERE id = ? AND route_id = ?", waypointID, routeID)
+		if err != nil {
+			return fmt.Errorf("delete waypoint %s: %w", waypointID, err)
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("read affected rows: %w", err)
+		}
+		if affected == 0 {
+			return ErrWaypointNotFound
+		}
+
+		const renumber = `
+			UPDATE waypoint w
+			JOIN (
+				SELECT id, ROW_NUMBER() OVER (ORDER BY display_order, id) - 1 AS position
+				FROM waypoint WHERE route_id = ?
+			) ranked ON ranked.id = w.id
+			SET w.display_order = ranked.position`
+		if _, err := tx.ExecContext(ctx, renumber, routeID); err != nil {
+			return fmt.Errorf("renumber waypoints of route %s: %w", routeID, err)
+		}
+
+		return nil
+	})
+}
+
 // AttachTasks replaces a waypoint's attachments inside one transaction, so the
 // waypoint is never briefly task-less from a reader's point of view.
 func (r *sqlRepo) AttachTasks(ctx context.Context, waypointID string, taskIDs []string) error {

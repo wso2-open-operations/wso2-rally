@@ -27,6 +27,7 @@ package main
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -53,6 +54,7 @@ const (
 type rally struct {
 	t         *testing.T
 	handler   http.Handler
+	db        *sql.DB
 	organizer string
 	teamToken string
 }
@@ -78,7 +80,23 @@ func newRally(t *testing.T) *rally {
 		organizer: authz.NewDecodeOnlyValidator(),
 	})
 
-	return &rally{t: t, handler: handler, organizer: organizerToken(t)}
+	return &rally{t: t, handler: handler, db: db, organizer: organizerToken(t)}
+}
+
+// drove rewinds the crew's last position fix into the past, standing in for
+// time this test cannot actually spend.
+//
+// The backend refuses a fix that could only be reached by teleporting — more
+// than 60 m/s since the previous one — so two requests sent back to back
+// several kilometres apart are, correctly, not a drive. Every hop between legs
+// has to say how long it took.
+func (r *rally) drove(d time.Duration) {
+	r.t.Helper()
+
+	_, err := r.db.Exec(
+		"UPDATE team_session SET last_ping_at = ? WHERE last_ping_at IS NOT NULL",
+		time.Now().UTC().Add(-d))
+	require.NoError(r.t, err)
 }
 
 // organizerToken stands in for an Asgardeo id token.
@@ -334,6 +352,10 @@ func TestHappyPath(t *testing.T) {
 	require.Equal(t, 1, openAlerts.TotalCount)
 
 	// --- They reach Pearl Bay, which finishes the run and issues vouchers. ---
+
+	// Roughly 4.7 km from the waypoint, so the fix is only credible if the car
+	// spent time covering it.
+	r.drove(20 * time.Minute)
 
 	arrival := decode[struct {
 		Arrived bool `json:"arrived"`

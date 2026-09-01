@@ -112,6 +112,28 @@ func (f *fakeRepo) UpdateWaypoint(_ context.Context, w Waypoint) error {
 	return nil
 }
 
+func (f *fakeRepo) DeleteWaypoint(ctx context.Context, routeID, waypointID string) error {
+	if _, ok := f.waypoints[waypointID]; !ok {
+		return ErrWaypointNotFound
+	}
+	delete(f.waypoints, waypointID)
+	delete(f.attached, waypointID)
+
+	remaining, err := f.ListWaypoints(ctx, routeID)
+	if err != nil {
+		return err
+	}
+	for position, w := range remaining {
+		// ListWaypoints hydrates TaskIDs; write back the stored row so the
+		// fake keeps attachments in `attached` alone, as the real repo does.
+		stored := f.waypoints[w.ID]
+		stored.Order = position
+		f.waypoints[w.ID] = stored
+	}
+
+	return nil
+}
+
 func (f *fakeRepo) ReorderWaypoints(_ context.Context, _ string, orderedIDs []string) error {
 	for position, id := range orderedIDs {
 		w := f.waypoints[id]
@@ -283,6 +305,27 @@ func TestService_ReorderWaypoints_RejectsIncompleteOrDuplicateSets(t *testing.T)
 			require.ErrorIs(t, err, apperr.ErrValidation)
 		})
 	}
+}
+
+// Removing a leg has to close the gap it leaves: display_order is what the
+// in-car "next waypoint" walk counts through, so a hole would strand a crew.
+func TestService_DeleteWaypoint_ClosesTheGapInTheOrder(t *testing.T) {
+	svc, _, route := newServiceWithRoute(t)
+	added := addWaypoints(t, svc, route.ID, "a", "b", "c")
+
+	got, err := svc.DeleteWaypoint(context.Background(), added[1].ID)
+
+	require.NoError(t, err)
+	require.Equal(t, []string{"a", "c"}, []string{got.Waypoints[0].Label, got.Waypoints[1].Label})
+	require.Equal(t, []int{0, 1}, []int{got.Waypoints[0].Order, got.Waypoints[1].Order})
+}
+
+func TestService_DeleteWaypoint_UnknownIsNotFound(t *testing.T) {
+	svc, _, _ := newServiceWithRoute(t)
+
+	_, err := svc.DeleteWaypoint(context.Background(), "0123456789abcdef0123456789abcdef")
+
+	require.ErrorIs(t, err, apperr.ErrNotFound)
 }
 
 func TestService_UpdateWaypoint_AppliesOnlyProvidedFields(t *testing.T) {

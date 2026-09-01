@@ -182,6 +182,47 @@ func TestRepo_UpdateWaypoint_UnknownIsNotFound(t *testing.T) {
 	require.ErrorIs(t, err, ErrWaypointNotFound)
 }
 
+func TestRepo_DeleteWaypoint_RenumbersTheRemainder(t *testing.T) {
+	_, repo, route := newRepoWithRoute(t)
+	svc := NewService(repo)
+	ctx := context.Background()
+	added := addWaypoints(t, svc, route.ID, "a", "b", "c", "d")
+
+	got, err := svc.DeleteWaypoint(ctx, added[1].ID)
+
+	require.NoError(t, err)
+	require.Equal(t, []string{"a", "c", "d"}, []string{
+		got.Waypoints[0].Label, got.Waypoints[1].Label, got.Waypoints[2].Label,
+	})
+	require.Equal(t, []int{0, 1, 2}, []int{
+		got.Waypoints[0].Order, got.Waypoints[1].Order, got.Waypoints[2].Order,
+	})
+}
+
+func TestRepo_DeleteWaypoint_TakesItsAttachmentsWithIt(t *testing.T) {
+	db, repo, route := newRepoWithRoute(t)
+	svc := NewService(repo)
+	ctx := context.Background()
+	waypoint := addWaypoints(t, svc, route.ID, "Kandy")[0]
+	require.NoError(t, svc.AttachTasks(ctx, waypoint.ID, []string{seedTask(t, db, route.EventID, "T1")}))
+
+	_, err := svc.DeleteWaypoint(ctx, waypoint.ID)
+	require.NoError(t, err)
+
+	var remaining int
+	require.NoError(t, db.QueryRow(
+		"SELECT COUNT(*) FROM waypoint_task WHERE waypoint_id = ?", waypoint.ID).Scan(&remaining))
+	require.Zero(t, remaining, "the task attachment rows cascade with the waypoint")
+}
+
+func TestRepo_DeleteWaypoint_UnknownIsNotFound(t *testing.T) {
+	_, repo, route := newRepoWithRoute(t)
+
+	err := repo.DeleteWaypoint(context.Background(), route.ID, store.NewID())
+
+	require.ErrorIs(t, err, ErrWaypointNotFound)
+}
+
 func TestRepo_DeletingARouteCascadesToWaypoints(t *testing.T) {
 	db, repo, route := newRepoWithRoute(t)
 	svc := NewService(repo)

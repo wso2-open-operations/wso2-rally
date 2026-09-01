@@ -79,7 +79,7 @@ b64 = lambda d: base64.urlsafe_b64encode(json.dumps(d).encode()).rstrip(b"=").de
 print(b64({"alg":"RS256","typ":"JWT"}) + "." + b64({
     "iss":"https://api.asgardeo.io/t/local", "sub":"dev-organizer",
     "email":"dev@wso2.com", "groups":["rally-admin"],
-    "exp":int(time.time())+86400}) + ".signature-not-checked-locally")')
+    "exp":int(time.time())+86400}) + ".not-verified-in-decode-only-mode")')
 
 curl -s -H "Authorization: Bearer $TOKEN" localhost:8080/users/me
 # {"email":"dev@wso2.com","groups":["rally-admin"],"userId":"dev-organizer"}
@@ -90,6 +90,12 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/
 
 The `iss` can be anything except `rally-team`, which is reserved for team tokens
 and rejected on the organizer path so a crew token cannot be replayed as staff.
+
+> The signature is never checked here, but it must still be **decodable**
+> base64url — the JWT parser decodes all three segments before it looks at any
+> claim. That means its length may not be `1 mod 4`: the 32-character filler
+> above works, and a 29-character one would fail with
+> `could not base64 decode signature`, which surfaces as a plain `401`.
 
 ## Building
 
@@ -253,6 +259,28 @@ in-memory fake and the SQL is tested separately against a real MySQL.
   identities; `tasks.RedactForCrew` removes the scoring keys before the
   definition reaches a phone. **Any new config key that decides a score must be
   added to `secretConfigKeys`**, or it ships to the car with the question.
+- **The WebSocket token arrives as a subprotocol, not a header.** A browser
+  cannot set one on a handshake, so `middleware.Auth` falls back to
+  `Sec-WebSocket-Protocol: rally-bearer, <token>` (`authz.BearerSubprotocol`)
+  when there is no `Authorization` header. Deliberately *not* a query parameter:
+  the request logger, the browser's history and every proxy would record it.
+  `realtime.Hub` must keep echoing the marker back on accept — RFC 6455 lets a
+  browser close a connection that agreed on none of the protocols it offered —
+  and must never echo the token, which would put the credential in a response
+  header.
+- **A vehicle can be deleted only before it runs.** Sessions, submissions,
+  scores and alerts all hang off `vehicle` by a cascading foreign key, so
+  `DELETE /vehicles/{id}` checks `team_session` first and returns 409 if the car
+  has any. The delete exists to fix provisioning, never to retire a car
+  mid-rally.
+- **A timestamp you do arithmetic on needs `TIMESTAMP(3)`.** A bare `TIMESTAMP`
+  has no fractional seconds and MySQL *rounds* to the nearest second on write,
+  so a value can come back up to half a second in the **future**. That is
+  invisible for a display column and poison for a computed one: it silently
+  disarmed the anti-teleport check on `last_ping_at` (a negative elapsed time
+  reads as a backwards clock, which accepts any jump) and rounded two crews
+  finishing 300 ms apart into a leaderboard dead heat. `0002` fixes those two;
+  the rest are display or audit values and stay at second resolution.
 - **Broadcasts are best-effort.** A subscriber that stops reading loses
   messages rather than blocking the crew whose submission produced them; the
   count is exposed by `Hub.Dropped`.

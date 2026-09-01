@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "a1c0f3e2-7b41-4d55-9c62-rally20270000",
     "name": "WSO2 Motor Rally API",
-    "description": "The rally game engine (backend/api/openapi.yaml).\n\n## Setup\n\n1. Start the service: `set -a && source config.env && set +a`, `make docker-db`, `make run`.\n2. Send **Health / Liveness probe** to confirm `{{baseUrl}}` is reachable.\n3. Run the folders top to bottom. Every request that creates something stores its id in a collection variable, so the next request already points at it.\n\n## Auth\n\nTwo identities share this API and the collection models both.\n\n- **Organizer** — collection-level Bearer `{{organizerToken}}`. Locally the service runs with `TOKEN_VALIDATOR_ENABLED=false`, so it decodes organizer claims without checking the signature. The collection pre-request script mints a token that satisfies that mode when `organizerToken` is empty. **Against any deployed environment, paste a real Asgardeo id token into `organizerToken` instead** — the minted one will be rejected.\n- **Crew** — the *In-car (crew)* folder overrides auth to Bearer `{{teamToken}}`. `POST /sessions/bind` is unauthenticated and mints that token; its test script stores it.\n\n## Not covered here\n\n`GET /ws` is a WebSocket upgrade, which a REST collection cannot carry. Open a Postman WebSocket request against `ws://localhost:8080/ws?topic=event:{{eventId}}` (organizers) or `topic=session:{{sessionId}}` (crews), passing the same bearer token. Contract: `backend/api/asyncapi.yaml`.\n\nEvery non-2xx body is exactly `{\"message\": \"...\"}`.",
+    "description": "The rally game engine (backend/api/openapi.yaml).\n\n## Setup\n\n1. Start the service: `set -a && source config.env && set +a`, `make docker-db`, `make run`.\n2. Send **Health / Liveness probe** to confirm `{{baseUrl}}` is reachable.\n3. Run the folders top to bottom. Every request that creates something stores its id in a collection variable, so the next request already points at it.\n\n## Auth\n\nTwo identities share this API and the collection models both.\n\n- **Organizer** — collection-level Bearer `{{organizerToken}}`. Locally the service runs with `TOKEN_VALIDATOR_ENABLED=false`, so it decodes organizer claims without checking the signature. The collection pre-request script mints a token that satisfies that mode when `organizerToken` is empty. **Against any deployed environment, paste a real Asgardeo id token into `organizerToken` instead** — the minted one will be rejected.\n- **Crew** — the *In-car (crew)* folder overrides auth to Bearer `{{teamToken}}`. `POST /sessions/join` is unauthenticated and mints that token; its test script stores it. Every phone in a car joins the *same* session and gets its own token, so re-running **Join vehicle** for a second crew member is a normal flow, not a conflict.\n\n## Not covered here\n\n`GET /ws` is a WebSocket upgrade, which a REST collection cannot carry. Open a Postman WebSocket request against `ws://localhost:8080/ws?topic=event:{{eventId}}` (organizers) or `topic=session:{{sessionId}}` (crews), passing the same bearer token. Contract: `backend/api/asyncapi.yaml`.\n\nEvery non-2xx body is exactly `{\"message\": \"...\"}`.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "auth": {
@@ -59,8 +59,10 @@
     { "key": "taskId", "value": "", "type": "string" },
     { "key": "vehicleId", "value": "", "type": "string" },
     { "key": "crewMemberId", "value": "", "type": "string" },
+    { "key": "phoneLast4", "value": "", "type": "string" },
     { "key": "alertId", "value": "", "type": "string" },
-    { "key": "sessionId", "value": "", "type": "string" }
+    { "key": "sessionId", "value": "", "type": "string" },
+    { "key": "deviceId", "value": "", "type": "string" }
   ],
   "item": [
     {
@@ -199,6 +201,33 @@
           ]
         },
         {
+          "name": "Event stats",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/events/{{eventId}}/stats",
+              "host": ["{{baseUrl}}"],
+              "path": ["events", "{{eventId}}", "stats"]
+            },
+            "description": "The four headline counts behind the A1 dashboard cards: fleet size, crew headcount, task count and open alerts. Counts only, never rows — the dashboard renders it without paging anything."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('every count is present', () => {",
+                  "    pm.expect(pm.response.json()).to.have.all.keys('vehicles', 'crews', 'tasks', 'openAlerts');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
           "name": "Update event",
           "request": {
             "method": "PATCH",
@@ -235,7 +264,7 @@
               "host": ["{{baseUrl}}"],
               "path": ["events", "{{eventId}}", "publish"]
             },
-            "description": "Opens the event to crews. Both geofences must be pinned first — without them the start grid cannot lock and arrival can never be detected. Publishing twice is a no-op.\n\n`POST /sessions/bind` fails with 409 until this succeeds."
+            "description": "Opens the event to crews. Both geofences must be pinned first — without them the start grid cannot lock and arrival can never be detected. Publishing twice is a no-op.\n\n`POST /sessions/join` fails with 409 until this succeeds."
           },
           "event": [
             {
@@ -445,6 +474,35 @@
               }
             }
           ]
+        },
+        {
+          "name": "Remove waypoint",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/waypoints/{{waypointId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["waypoints", "{{waypointId}}"]
+            },
+            "description": "Drops a leg and returns the renumbered route.\n\nThe remaining waypoints close the gap so `display_order` stays 0..n-1 — the in-car runtime walks that order to decide what is next, and a hole would strand a crew at it. The waypoint's task attachments cascade away with it; the tasks themselves stay in the event's library.\n\nSend this last in the folder: it leaves `{{waypointId}}` pointing at a row that no longer exists."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const route = pm.response.json();",
+                  "pm.test('the order is left gap-free', () => {",
+                  "    const orders = (route.waypoints || []).map((w) => w.order);",
+                  "    pm.expect(orders).to.eql(orders.map((_, i) => i));",
+                  "});"
+                ]
+              }
+            }
+          ]
         }
       ]
     },
@@ -610,14 +668,14 @@
             "body": {
               "mode": "raw",
               "options": { "raw": { "language": "json" } },
-              "raw": "{\n  \"code\": \"PKT-001\",\n  \"teamName\": \"Popcorn Pioneers\",\n  \"vehicleType\": \"SUV\",\n  \"contactNumber\": \"+94771234567\",\n  \"routeId\": \"{{routeId}}\",\n  \"crew\": [\n    { \"name\": \"Nimal Perera\", \"role\": \"navigator\", \"originCountry\": \"LK\" },\n    { \"name\": \"Ayesha Fernando\", \"role\": \"node\", \"originCountry\": \"LK\" }\n  ]\n}"
+              "raw": "{\n  \"code\": \"PKT-001\",\n  \"teamName\": \"Popcorn Pioneers\",\n  \"vehicleType\": \"SUV\",\n  \"contactNumber\": \"+94771234567\",\n  \"routeId\": \"{{routeId}}\",\n  \"crew\": [\n    { \"name\": \"Nimal Perera\", \"phoneNumber\": \"+94771234567\", \"role\": \"navigator\", \"originCountry\": \"LK\" },\n    { \"name\": \"Ayesha Fernando\", \"phoneNumber\": \"+94777654321\", \"role\": \"node\", \"originCountry\": \"LK\" }\n  ]\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/events/{{eventId}}/vehicles",
               "host": ["{{baseUrl}}"],
               "path": ["events", "{{eventId}}", "vehicles"]
             },
-            "description": "Provisions the vehicle and its crew roster in one call. The crew ids returned here are what a phone picks from at bind time. A duplicate `code` within the event is a 409."
+            "description": "Provisions the vehicle and its crew roster in one call. The crew ids returned here are what a phone picks from at join time, and each member's `phoneNumber` is what the last-four check on `POST /sessions/join` is verified against — a member with no number on file can never join. A duplicate `code` within the event is a 409."
           },
           "event": [
             {
@@ -630,6 +688,7 @@
                   "pm.collectionVariables.set('vehicleId', vehicle.id);",
                   "if (vehicle.crew && vehicle.crew.length) {",
                   "    pm.collectionVariables.set('crewMemberId', vehicle.crew[0].id);",
+                  "    pm.collectionVariables.set('phoneLast4', vehicle.crew[0].phoneNumber.replace(/\\D/g, '').slice(-4));",
                   "}",
                   "console.log('vehicleId =', vehicle.id, 'crewMemberId =', pm.collectionVariables.get('crewMemberId'));"
                 ]
@@ -645,13 +704,14 @@
             "body": {
               "mode": "raw",
               "options": { "raw": { "language": "json" } },
-              "raw": "{\n  \"offset\": 0,\n  \"limit\": 20\n}"
+              "raw": "{\n  \"offset\": 0,\n  \"limit\": 20,\n  \"filters\": {\n    \"query\": \"\",\n    \"routeId\": \"\"\n  }\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/events/{{eventId}}/vehicles/search",
               "host": ["{{baseUrl}}"],
               "path": ["events", "{{eventId}}", "vehicles", "search"]
-            }
+            },
+            "description": "`filters.query` matches the vehicle code or the team name, anywhere in the value and ignoring case; `filters.routeId` narrows to one course. Both are optional, and the empty strings above match the whole fleet.\n\nThe returned `totalCount` counts what the filter matched, not the fleet, so a filtered table pages through its own results."
           },
           "event": [
             {
@@ -734,7 +794,7 @@
               "host": ["{{baseUrl}}"],
               "path": ["vehicles", "{{vehicleId}}"]
             },
-            "description": "Refreshes `crewMemberId` from the live roster, which is what `POST /sessions/bind` binds against."
+            "description": "Refreshes `crewMemberId` and `phoneLast4` from the live roster, which is what `POST /sessions/join` checks a phone against."
           },
           "event": [
             {
@@ -746,6 +806,7 @@
                   "const vehicle = pm.response.json();",
                   "if (vehicle.crew && vehicle.crew.length) {",
                   "    pm.collectionVariables.set('crewMemberId', vehicle.crew[0].id);",
+                  "    pm.collectionVariables.set('phoneLast4', vehicle.crew[0].phoneNumber.replace(/\\D/g, '').slice(-4));",
                   "}"
                 ]
               }
@@ -760,14 +821,14 @@
             "body": {
               "mode": "raw",
               "options": { "raw": { "language": "json" } },
-              "raw": "{\n  \"code\": \"PKT-001\",\n  \"teamName\": \"Popcorn Pioneers\",\n  \"vehicleType\": \"Pickup\",\n  \"contactNumber\": \"+94771234567\",\n  \"routeId\": \"{{routeId}}\",\n  \"crew\": [\n    { \"name\": \"Nimal Perera\", \"role\": \"navigator\", \"originCountry\": \"LK\" },\n    { \"name\": \"Ayesha Fernando\", \"role\": \"node\", \"originCountry\": \"LK\" }\n  ]\n}"
+              "raw": "{\n  \"code\": \"PKT-001\",\n  \"teamName\": \"Popcorn Pioneers\",\n  \"vehicleType\": \"Pickup\",\n  \"contactNumber\": \"+94771234567\",\n  \"routeId\": \"{{routeId}}\",\n  \"status\": \"ok\",\n  \"crew\": [\n    { \"name\": \"Nimal Perera\", \"phoneNumber\": \"+94771234567\", \"role\": \"navigator\", \"originCountry\": \"LK\" },\n    { \"name\": \"Ayesha Fernando\", \"phoneNumber\": \"+94777654321\", \"role\": \"node\", \"originCountry\": \"LK\" }\n  ]\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/vehicles/{{vehicleId}}",
               "host": ["{{baseUrl}}"],
               "path": ["vehicles", "{{vehicleId}}"]
             },
-            "description": "**A supplied `crew` replaces the whole roster** — omitting a member deletes them, and the replacements get new ids. Send the full list.\n\nBecause the ids change, the test script re-reads `crewMemberId` from the response. A stale one makes `POST /sessions/bind` fail with 400."
+            "description": "**A supplied `crew` replaces the whole roster** — omitting a member deletes them, and the replacements get new ids. Send the full list.\n\nBecause the ids change, the test script re-reads `crewMemberId` and `phoneLast4` from the response. A stale `crewMemberId` makes `POST /sessions/join` fail with 404.\n\n`status` (`ok`, `breakdown`, `device_issue`) is patchable here too, though the Alerts folder is what normally moves it."
           },
           "event": [
             {
@@ -776,11 +837,12 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('200 OK', () => pm.response.to.have.status(200));",
-                  "// The replacement crew has new ids, so the one bind will use has",
+                  "// The replacement crew has new ids, so the one join will use has",
                   "// just changed underneath us.",
                   "const vehicle = pm.response.json();",
                   "if (vehicle.crew && vehicle.crew.length) {",
                   "    pm.collectionVariables.set('crewMemberId', vehicle.crew[0].id);",
+                  "    pm.collectionVariables.set('phoneLast4', vehicle.crew[0].phoneNumber.replace(/\\D/g, '').slice(-4));",
                   "}"
                 ]
               }
@@ -998,14 +1060,14 @@
     },
     {
       "name": "In-car (crew)",
-      "description": "The phone's surface. Every request here authenticates with `{{teamToken}}`, not the organizer token — the folder overrides collection auth.\n\nRun **Bind vehicle** first: it is the only unauthenticated write and it is what issues the token. The event must be published.",
+      "description": "The phone's surface. Every request here authenticates with `{{teamToken}}`, not the organizer token — the folder overrides collection auth.\n\nRun **Join vehicle** first: it is the only unauthenticated write and it is what issues the token. The event must be published.",
       "auth": {
         "type": "bearer",
         "bearer": [{ "key": "token", "value": "{{teamToken}}", "type": "string" }]
       },
       "item": [
         {
-          "name": "Bind vehicle (mints the team token)",
+          "name": "Join vehicle (mints the team token)",
           "request": {
             "method": "POST",
             "auth": { "type": "noauth" },
@@ -1013,10 +1075,10 @@
             "body": {
               "mode": "raw",
               "options": { "raw": { "language": "json" } },
-              "raw": "{\n  \"vehicleId\": \"{{vehicleId}}\",\n  \"crewMemberIds\": [\n    \"{{crewMemberId}}\"\n  ]\n}"
+              "raw": "{\n  \"vehicleId\": \"{{vehicleId}}\",\n  \"crewMemberId\": \"{{crewMemberId}}\",\n  \"phoneLast4\": \"{{phoneLast4}}\"\n}"
             },
-            "url": { "raw": "{{baseUrl}}/sessions/bind", "host": ["{{baseUrl}}"], "path": ["sessions", "bind"] },
-            "description": "The zero-facilitator start: no one hands out credentials, the crew picks their own vehicle, and binding is what authenticates the phone.\n\n`crewMemberIds` are chosen from the vehicle's own roster.\n\n**One active phone per vehicle.** A second device binding the same vehicle gets a 409, enforced by a unique index on `(vehicle_id, active_flag)` — two phones racing cannot both win. A 409 also means the event is not published yet."
+            "url": { "raw": "{{baseUrl}}/sessions/join", "host": ["{{baseUrl}}"], "path": ["sessions", "join"] },
+            "description": "The zero-facilitator start: no one hands out credentials, the crew picks their own vehicle, and joining is what authenticates the phone.\n\n`crewMemberId` is chosen from the vehicle's own roster; `phoneLast4` is the last four digits of that member's number as the organizer entered it, which is the only thing standing between a stranger and someone else's car.\n\n**Every phone in the car joins the same session.** The first to arrive creates it and the rest attach to it — each gets its own device row and its own team token, and `crew` in the response is who else is already aboard. There is no one-phone-per-vehicle conflict; send this again with a second `crewMemberId` to model a second phone.\n\nFailure modes: 409 if the event is not `active` (publish it first), 404 if the member is not on this vehicle's roster, 403 if the last four digits do not match. The 403 never says which half was wrong."
           },
           "event": [
             {
@@ -1028,7 +1090,11 @@
                   "const body = pm.response.json();",
                   "pm.collectionVariables.set('teamToken', body.teamToken);",
                   "pm.collectionVariables.set('sessionId', body.session.id);",
-                  "console.log('sessionId =', body.session.id);"
+                  "pm.collectionVariables.set('deviceId', body.device.id);",
+                  "pm.test('this phone is listed in the crew it was handed', () => {",
+                  "    pm.expect(body.crew.map((d) => d.id)).to.include(body.device.id);",
+                  "});",
+                  "console.log('sessionId =', body.session.id, 'deviceId =', body.device.id);"
                 ]
               }
             }
@@ -1245,6 +1311,40 @@
               "script": {
                 "type": "text/javascript",
                 "exec": ["pm.test('200 OK', () => pm.response.to.have.status(200));"]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Cleanup",
+      "description": "Destructive requests, kept last so a top-to-bottom run does not delete the vehicle that the Alerts and In-car folders still need.",
+      "item": [
+        {
+          "name": "Remove vehicle",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/vehicles/{{vehicleId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["vehicles", "{{vehicleId}}"]
+            },
+            "description": "Corrects provisioning; it does not retire a car mid-rally.\n\nSessions, submissions, scores and alerts all hang off the vehicle row by a cascading foreign key, so this is refused with a **409 once the vehicle has any session** — deleting one then would erase a result rather than fix a typo. The crew cascades away with the vehicle.\n\nRun it after the *In-car (crew)* folder and you should get the 409, which is the interesting case."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// 204 before the car has run, 409 after — both are correct,",
+                  "// so assert the pair rather than pinning one.",
+                  "pm.test('204 deleted, or 409 because it has run', () => {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([204, 409]);",
+                  "});"
+                ]
               }
             }
           ]

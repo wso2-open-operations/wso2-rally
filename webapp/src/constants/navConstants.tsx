@@ -31,8 +31,6 @@ export interface NavItem {
   label: string;
   path: string;
   icon: ComponentType<{ size?: number }>;
-  /** False while the feature is still to be built (see the webapp plan). */
-  implemented: boolean;
 }
 
 /**
@@ -41,11 +39,11 @@ export interface NavItem {
  * This is the A1–A8 wireframe order and should not be re-sorted alphabetically.
  */
 export const NAV_ITEMS: NavItem[] = [
-  { id: "events", label: "Events", path: "/events", icon: CalendarDays, implemented: true },
-  { id: "routes", label: "Routes", path: "/routes", icon: Route, implemented: false },
-  { id: "tasks", label: "Tasks", path: "/tasks", icon: ClipboardList, implemented: false },
-  { id: "vehicles", label: "Vehicles", path: "/vehicles", icon: Car, implemented: false },
-  { id: "monitor", label: "Live Monitor", path: "/monitor", icon: Flag, implemented: false },
-  { id: "leaderboard", label: "Leaderboard", path: "/leaderboard", icon: Trophy, implemented: false },
-  { id: "debrief", label: "Debrief", path: "/debrief", icon: Video, implemented: false },
+  { id: "events", label: "Events", path: "/events", icon: CalendarDays },
+  { id: "routes", label: "Routes", path: "/routes", icon: Route },
+  { id: "tasks", label: "Tasks", path: "/tasks", icon: ClipboardList },
+  { id: "vehicles", label: "Vehicles", path: "/vehicles", icon: Car },
+  { id: "monitor", label: "Live Monitor", path: "/monitor", icon: Flag },
+  { id: "leaderboard", label: "Leaderboard", path: "/leaderboard", icon: Trophy },
+  { id: "debrief", label: "Debrief", path: "/debrief", icon: Video },
 ];

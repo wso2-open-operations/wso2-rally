@@ -51,6 +51,7 @@ func (h *Handler) Register(r chi.Router) {
 	r.Get("/events/{eventId}/vehicles/export", h.exportCSV)
 	r.Get("/vehicles/{vehicleId}", h.get)
 	r.Patch("/vehicles/{vehicleId}", h.update)
+	r.Delete("/vehicles/{vehicleId}", h.delete)
 }
 
 func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
@@ -102,14 +103,25 @@ func (h *Handler) search(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	found, total, err := h.service.Search(r.Context(),
-		chi.URLParam(r, "eventId"), httpx.NormalizePage(req.Offset, req.Limit))
+	found, total, err := h.service.Search(r.Context(), chi.URLParam(r, "eventId"),
+		req.toFilter(), httpx.NormalizePage(req.Offset, req.Limit))
 	if err != nil {
 		httpx.WriteDomainError(w, r, h.logger, err)
 		return
 	}
 
 	httpx.WriteJSON(w, http.StatusOK, httpx.NewSearchResult(toDTOs(found), total))
+}
+
+// delete removes a vehicle that should not have been provisioned. It is refused
+// with a 409 once the vehicle has run, so a correction can never erase a result.
+func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
+	if err := h.service.Delete(r.Context(), chi.URLParam(r, "vehicleId")); err != nil {
+		httpx.WriteDomainError(w, r, h.logger, err)
+		return
+	}
+
+	httpx.WriteNoContent(w)
 }
 
 // importCSV provisions vehicles from an uploaded spreadsheet.

@@ -45,6 +45,7 @@ func (h *Handler) Register(r chi.Router) {
 	r.Post("/routes/{routeId}/waypoints", h.addWaypoint)
 	r.Patch("/routes/{routeId}/waypoints/order", h.reorderWaypoints)
 	r.Patch("/waypoints/{waypointId}", h.updateWaypoint)
+	r.Delete("/waypoints/{waypointId}", h.deleteWaypoint)
 	r.Post("/waypoints/{waypointId}/tasks", h.attachTasks)
 }
 
@@ -148,6 +149,18 @@ func (h *Handler) updateWaypoint(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httpx.WriteJSON(w, http.StatusOK, toWaypointDTO(waypoint))
+}
+
+func (h *Handler) deleteWaypoint(w http.ResponseWriter, r *http.Request) {
+	route, err := h.service.DeleteWaypoint(r.Context(), chi.URLParam(r, "waypointId"))
+	if err != nil {
+		httpx.WriteDomainError(w, r, h.logger, err)
+		return
+	}
+
+	// The renumbered route, not 204: deleting a leg shifts every waypoint after
+	// it, so the editor needs the new sequence rather than its own guess at it.
+	httpx.WriteJSON(w, http.StatusOK, toRouteDTO(route))
 }
 
 func (h *Handler) reorderWaypoints(w http.ResponseWriter, r *http.Request) {

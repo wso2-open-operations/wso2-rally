@@ -187,11 +187,119 @@ func TestRepo_Search_PaginatesByCode(t *testing.T) {
 	_, err := svc.ImportCSV(ctx, eventID, strings.NewReader(importCSV))
 	require.NoError(t, err)
 
-	found, total, err := repo.Search(ctx, eventID, httpx.Page{Offset: 0, Limit: 1})
+	found, total, err := repo.Search(ctx, eventID, SearchFilter{}, httpx.Page{Offset: 0, Limit: 1})
 
 	require.NoError(t, err)
 	require.Equal(t, 2, total)
 	require.Len(t, found, 1)
 	require.Equal(t, "PKT-001", found[0].Code)
 	require.Len(t, found[0].Crew, 2, "search results carry their crew")
+}
+
+// The filter has to narrow the count as well as the rows, or a filtered table
+// would page through totals it cannot show.
+func TestRepo_Search_FiltersNarrowTheTotal(t *testing.T) {
+	db := storetest.DB(t)
+	repo := NewRepo(db)
+	svc := NewService(repo)
+	ctx := context.Background()
+	eventID := seedEventWithRoutes(t, db)
+	_, err := svc.ImportCSV(ctx, eventID, strings.NewReader(importCSV))
+	require.NoError(t, err)
+	page := httpx.Page{Offset: 0, Limit: 20}
+
+	found, total, err := repo.Search(ctx, eventID, SearchFilter{Query: "002"}, page)
+	require.NoError(t, err)
+	require.Equal(t, 1, total)
+	require.Equal(t, "PKT-002", found[0].Code)
+
+	// "%" is a LIKE wildcard; escaped, it matches no code rather than every one.
+	_, total, err = repo.Search(ctx, eventID, SearchFilter{Query: "%"}, page)
+	require.NoError(t, err)
+	require.Zero(t, total, "wildcards in the query are escaped, not honoured")
+}
+
+func TestRepo_Delete_RemovesTheVehicleAndItsCrew(t *testing.T) {
+	db := storetest.DB(t)
+	repo := NewRepo(db)
+	svc := NewService(repo)
+	ctx := context.Background()
+	eventID := seedEventWithRoutes(t, db)
+	_, err := svc.ImportCSV(ctx, eventID, strings.NewReader(importCSV))
+	require.NoError(t, err)
+	found, _, err := repo.Search(ctx, eventID, SearchFilter{Query: "PKT-001"}, httpx.Page{Offset: 0, Limit: 20})
+	require.NoError(t, err)
+	vehicle := found[0]
+
+	require.NoError(t, svc.Delete(ctx, vehicle.ID))
+
+	_, err = repo.Get(ctx, vehicle.ID)
+	require.ErrorIs(t, err, ErrNotFound)
+
+	var crewRows int
+	require.NoError(t, db.QueryRow(
+		"SELECT COUNT(*) FROM crew_member WHERE vehicle_id = ?", vehicle.ID).Scan(&crewRows))
+	require.Zero(t, crewRows, "the crew cascades with its vehicle")
+}
+
+// The service checks HasRun before calling Delete, but a session can be created
+// in between. The delete itself must refuse, or the cascade takes the session,
+// its alerts and its submissions with it.
+func TestRepo_Delete_RefusesAVehicleThatGainedASession(t *testing.T) {
+	db := storetest.DB(t)
+	repo := NewRepo(db)
+	svc := NewService(repo)
+	ctx := context.Background()
+	eventID := seedEventWithRoutes(t, db)
+	_, err := svc.ImportCSV(ctx, eventID, strings.NewReader(importCSV))
+	require.NoError(t, err)
+	found, _, err := repo.Search(ctx, eventID, SearchFilter{Query: "PKT-001"}, httpx.Page{Offset: 0, Limit: 20})
+	require.NoError(t, err)
+	vehicle := found[0]
+
+	// Stands in for the session that commits between the guard and the delete:
+	// the repository is called directly, exactly as it would be after losing
+	// that race.
+	_, err = db.Exec(
+		"INSERT INTO team_session (id, event_id, vehicle_id, status) VALUES (?, ?, ?, 'bound')",
+		store.NewID(), eventID, vehicle.ID)
+	require.NoError(t, err)
+
+	require.ErrorIs(t, repo.Delete(ctx, vehicle.ID), ErrHasRun)
+
+	_, err = repo.Get(ctx, vehicle.ID)
+	require.NoError(t, err, "the vehicle survives")
+
+	var sessions int
+	require.NoError(t, db.QueryRow(
+		"SELECT COUNT(*) FROM team_session WHERE vehicle_id = ?", vehicle.ID).Scan(&sessions))
+	require.Equal(t, 1, sessions, "and so does the session it would have cascaded")
+}
+
+func TestRepo_HasRun_SeesASession(t *testing.T) {
+	db := storetest.DB(t)
+	repo := NewRepo(db)
+	svc := NewService(repo)
+	ctx := context.Background()
+	eventID := seedEventWithRoutes(t, db)
+	_, err := svc.ImportCSV(ctx, eventID, strings.NewReader(importCSV))
+	require.NoError(t, err)
+	found, _, err := repo.Search(ctx, eventID, SearchFilter{Query: "PKT-001"}, httpx.Page{Offset: 0, Limit: 20})
+	require.NoError(t, err)
+	vehicle := found[0]
+
+	hasRun, err := repo.HasRun(ctx, vehicle.ID)
+	require.NoError(t, err)
+	require.False(t, hasRun)
+
+	_, err = db.Exec(
+		"INSERT INTO team_session (id, event_id, vehicle_id, status) VALUES (?, ?, ?, 'bound')",
+		store.NewID(), eventID, vehicle.ID)
+	require.NoError(t, err)
+
+	hasRun, err = repo.HasRun(ctx, vehicle.ID)
+	require.NoError(t, err)
+	require.True(t, hasRun, "a bound session already counts as a run")
+
+	require.ErrorIs(t, svc.Delete(ctx, vehicle.ID), ErrHasRun)
 }

@@ -52,6 +52,9 @@ vi.mock("react-leaflet", () => ({
   TileLayer: () => null,
   Marker: () => null,
   Circle: () => null,
+  CircleMarker: () => null,
+  Polyline: () => null,
+  Tooltip: () => null,
   useMapEvents: () => null,
   useMap: () => ({ setView: vi.fn(), flyTo: vi.fn() }),
 }));

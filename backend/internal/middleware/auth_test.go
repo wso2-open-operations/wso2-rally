@@ -209,3 +209,105 @@ func TestRequireOrganizer_403HasNoChallenge(t *testing.T) {
 	require.Equal(t, http.StatusForbidden, rr.Code)
 	require.Empty(t, rr.Header().Get("WWW-Authenticate"))
 }
+
+// A browser cannot set an Authorization header on a WebSocket handshake:
+// `new WebSocket(url)` takes no headers. The only channel it controls is the
+// subprotocol list, so the token rides there — and it must NOT ride in the
+// query string, which the request logger and any proxy would record.
+func TestAuth_AcceptsATokenFromTheWebSocketSubprotocol(t *testing.T) {
+	tok, err := authz.MintTeamToken(teamSecret,
+		authz.TeamClaims{SessionID: "sess1", VehicleID: "veh1", DeviceID: "dev1", CrewMemberID: "crew1"},
+		time.Hour)
+	require.NoError(t, err)
+	var got authz.Identity
+
+	rr := serveWithSubprotocols(t, Auth(testConfig(), rejectingValidator()), &got,
+		authz.BearerSubprotocol+", "+tok)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Equal(t, authz.KindTeam, got.Kind)
+	require.Equal(t, "sess1", got.SessionID)
+}
+
+// The fallback exists for handshakes, which cannot carry an Authorization
+// header. An ordinary request has no business offering subprotocols, so
+// honouring one there would be a second credential channel across the whole
+// API to serve a single route.
+func TestAuth_IgnoresSubprotocolOnANonHandshake(t *testing.T) {
+	tok, err := authz.MintTeamToken(teamSecret,
+		authz.TeamClaims{SessionID: "sess1", VehicleID: "veh1", DeviceID: "dev1", CrewMemberID: "crew1"},
+		time.Hour)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	req.Header.Set("Sec-WebSocket-Protocol", authz.BearerSubprotocol+", "+tok)
+	// Deliberately no Upgrade header: this is a plain REST call.
+	rr := httptest.NewRecorder()
+	var got authz.Identity
+	Auth(testConfig(), rejectingValidator())(okHandler(&got)).ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusUnauthorized, rr.Code)
+}
+
+func TestAuth_SubprotocolTokenWorksForOrganizersToo(t *testing.T) {
+	organizer := authz.Identity{Kind: authz.KindOrganizer, UserID: "u1", Groups: []string{"rally-admin"}}
+	var got authz.Identity
+
+	rr := serveWithSubprotocols(t, Auth(testConfig(), stubValidator{identity: organizer}), &got,
+		authz.BearerSubprotocol+",an-id-token")
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Equal(t, organizer, got)
+}
+
+// The Authorization header stays authoritative: a subprotocol list is only
+// consulted when there is no header to read.
+func TestAuth_HeaderWinsOverSubprotocol(t *testing.T) {
+	tok, err := authz.MintTeamToken(teamSecret,
+		authz.TeamClaims{SessionID: "from-header", VehicleID: "v", DeviceID: "d", CrewMemberID: "c"},
+		time.Hour)
+	require.NoError(t, err)
+	var got authz.Identity
+
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	req.Header.Set("Authorization", "Bearer "+tok)
+	req.Header.Set("Sec-WebSocket-Protocol", authz.BearerSubprotocol+", not-a-real-token")
+	rr := httptest.NewRecorder()
+	Auth(testConfig(), rejectingValidator())(okHandler(&got)).ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Equal(t, "from-header", got.SessionID)
+}
+
+func TestAuth_RejectsMalformedSubprotocolLists(t *testing.T) {
+	for _, offered := range []string{
+		"",                             // no subprotocols at all
+		"graphql-ws",                   // some other protocol
+		authz.BearerSubprotocol,        // the marker with no token after it
+		authz.BearerSubprotocol + ", ", // the marker with an empty token
+		"rally-bearer-ish, some-token", // a marker that only looks like ours
+	} {
+		t.Run(offered, func(t *testing.T) {
+			rr := serveWithSubprotocols(t, Auth(testConfig(), rejectingValidator()), nil, offered)
+
+			require.Equal(t, http.StatusUnauthorized, rr.Code)
+		})
+	}
+}
+
+func serveWithSubprotocols(
+	t *testing.T, mw func(http.Handler) http.Handler, capture *authz.Identity, offered string,
+) *httptest.ResponseRecorder {
+	t.Helper()
+
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	// These cases are handshakes; the fallback is only consulted on one.
+	req.Header.Set("Upgrade", "websocket")
+	if offered != "" {
+		req.Header.Set("Sec-WebSocket-Protocol", offered)
+	}
+	rr := httptest.NewRecorder()
+	mw(okHandler(capture)).ServeHTTP(rr, req)
+
+	return rr
+}

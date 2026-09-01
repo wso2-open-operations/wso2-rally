@@ -70,8 +70,18 @@ type UpdateVehicleRequest struct {
 
 // SearchVehiclesRequest is the POST /events/{eventId}/vehicles/search body.
 type SearchVehiclesRequest struct {
-	Offset int `json:"offset"`
-	Limit  int `json:"limit"`
+	Offset  int `json:"offset"`
+	Limit   int `json:"limit"`
+	Filters struct {
+		// Query matches the vehicle code or the team name.
+		Query string `json:"query"`
+		// RouteID restricts the result to one course.
+		RouteID string `json:"routeId"`
+	} `json:"filters"`
+}
+
+func (r SearchVehiclesRequest) toFilter() SearchFilter {
+	return SearchFilter{Query: r.Filters.Query, RouteID: r.Filters.RouteID}
 }
 
 // ImportResultDTO reports how many vehicles a CSV upload provisioned.

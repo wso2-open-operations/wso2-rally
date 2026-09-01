@@ -37,6 +37,9 @@ type Repo interface {
 	GetWaypoint(ctx context.Context, id string) (Waypoint, error)
 	CreateWaypoint(ctx context.Context, w Waypoint) error
 	UpdateWaypoint(ctx context.Context, w Waypoint) error
+	// DeleteWaypoint removes the waypoint and renumbers what is left of the
+	// route, both in one transaction.
+	DeleteWaypoint(ctx context.Context, routeID, waypointID string) error
 	// ReorderWaypoints rewrites display_order for the whole route atomically.
 	ReorderWaypoints(ctx context.Context, routeID string, orderedIDs []string) error
 	// AttachTasks replaces the waypoint's task attachments with taskIDs.
@@ -193,6 +196,26 @@ func (s *Service) UpdateWaypoint(ctx context.Context, waypointID string, in Upda
 	}
 
 	return waypoint, nil
+}
+
+// DeleteWaypoint removes a leg from its route and returns what is left.
+//
+// The remaining waypoints are renumbered so the sequence stays 0..n-1: the
+// in-car runtime walks display_order to decide what is next, so a hole left
+// where the deleted leg was would strand a crew at the gap. The renumbered
+// route comes back for the same reason ReorderWaypoints returns one — every
+// sibling's position may have moved, so the editor re-renders from the server.
+func (s *Service) DeleteWaypoint(ctx context.Context, waypointID string) (Route, error) {
+	waypoint, err := s.repo.GetWaypoint(ctx, waypointID)
+	if err != nil {
+		return Route{}, err
+	}
+
+	if err := s.repo.DeleteWaypoint(ctx, waypoint.RouteID, waypointID); err != nil {
+		return Route{}, fmt.Errorf("delete waypoint %s: %w", waypointID, err)
+	}
+
+	return s.GetRoute(ctx, waypoint.RouteID)
 }
 
 // ReorderWaypoints rewrites the leg sequence of a route.

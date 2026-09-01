@@ -29,6 +29,8 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/stretchr/testify/require"
+
+	"github.com/wso2-open-operations/wso2-motor-rally/backend/internal/authz"
 )
 
 const testTopic = "event:0123456789abcdef0123456789abcdef"
@@ -284,4 +286,45 @@ func TestHub_ConcurrentDropsDoNotRace(t *testing.T) {
 	wg.Wait()
 
 	require.Positive(t, hub.Dropped())
+}
+
+// A browser sends its credential as a subprotocol, and RFC 6455 requires the
+// server to name one of the offered protocols in its response — a handshake
+// that agrees on none is closed by the browser straight after opening. So the
+// hub has to echo the marker back, and must not echo the token itself.
+func TestHub_ServeWSNegotiatesTheBearerSubprotocol(t *testing.T) {
+	hub := newTestHub(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hub.ServeWS(w, r, testTopic)
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, _, err := websocket.Dial(ctx, "ws"+server.URL[len("http"):], &websocket.DialOptions{
+		Subprotocols: []string{authz.BearerSubprotocol, "a-token-shaped-string"},
+	})
+	require.NoError(t, err)
+	defer func() { _ = conn.CloseNow() }()
+
+	require.Equal(t, authz.BearerSubprotocol, conn.Subprotocol(),
+		"the agreed subprotocol must be the marker, never the token")
+}
+
+// A client that offers nothing still connects: the micro app and the organizer
+// app both send a token, but a Postman or curl session with a header does not.
+func TestHub_ServeWSStillAcceptsAClientOfferingNoSubprotocol(t *testing.T) {
+	hub := newTestHub(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hub.ServeWS(w, r, testTopic)
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, _, err := websocket.Dial(ctx, "ws"+server.URL[len("http"):], nil)
+	require.NoError(t, err)
+	defer func() { _ = conn.CloseNow() }()
+
+	require.Empty(t, conn.Subprotocol())
 }

@@ -137,3 +137,19 @@ type UpdateVehicleInput struct {
 	Status        *Status
 	Crew          *[]CrewMemberInput
 }
+
+// SearchFilter narrows a vehicle search. The zero value matches every vehicle
+// of the event.
+type SearchFilter struct {
+	// Query matches the vehicle code or the team name, case-insensitively and
+	// anywhere in the value — an organizer looking for a car mid-rally knows
+	// "087" or "Dashers", not which column it lives in.
+	Query string
+	// RouteID restricts the result to one course.
+	RouteID string
+}
+
+// ErrHasRun means the vehicle already has a rally session, so deleting it would
+// take a crew's score, submissions and alerts with it.
+var ErrHasRun = fmt.Errorf(
+	"%w: this vehicle has already run, so it can be corrected but not deleted", apperr.ErrConflict)

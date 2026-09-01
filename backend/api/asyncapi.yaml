@@ -14,6 +14,27 @@ info:
     The session topic carries the cipher reveal and the event topic carries
     every other team's position, so neither is open to the wrong caller.
 
+    ## Sending the token
+
+    A browser cannot set a header on a WebSocket handshake — `new WebSocket`
+    takes a URL and a subprotocol list, nothing else — and the token must not
+    travel in the query string, where the request log, the browser's history and
+    every proxy in between would record it. So the token rides in the
+    subprotocol list, behind a marker:
+
+    ```js
+    new WebSocket(`${wsUrl}?topic=event:${eventId}`, ["rally-bearer", idToken]);
+    ```
+
+    The server reads the entry immediately after `rally-bearer` and treats it
+    exactly as an `Authorization: Bearer` value, then echoes **only the marker**
+    back as the agreed subprotocol — RFC 6455 lets a browser close a connection
+    that agreed on none of the protocols it offered, and echoing the token would
+    put the credential in a response header.
+
+    A non-browser client (curl, Postman, a Go test) can still send an ordinary
+    `Authorization` header, which stays authoritative where both are present.
+
     Delivery is best-effort. A client that stops reading loses messages rather
     than blocking the crew whose submission produced them, so a reconnecting
     screen should refetch `GET /events/{eventId}/monitor` or

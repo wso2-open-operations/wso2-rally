@@ -34,10 +34,10 @@ config and **no prettier**.
 | ------ | ----- | ------ |
 | A1 Events dashboard | `/events` | ✅ |
 | A2 Event setup | `/events/new`, `/events/:eventId/setup` | ✅ |
-| A3 Routes & geofences | `/routes` | placeholder |
-| A4 Task library | `/tasks` | placeholder |
-| A5 Vehicles & crews | `/vehicles` | placeholder |
-| A6 Live monitor | `/monitor` | placeholder |
+| A3 Routes & geofences | `/routes` | ✅ |
+| A4 Task library | `/tasks` | ✅ |
+| A5 Vehicles & crews | `/vehicles` | ✅ |
+| A6 Live monitor | `/monitor` | ✅ |
 | A7 Leaderboard | `/leaderboard` | placeholder |
 | A8 Debrief | `/debrief` | placeholder |
 
@@ -152,7 +152,7 @@ pnpm dev                          # dev server on :3000, HMR
 pnpm build                        # tsc -b && vite build → dist/
 pnpm preview                      # serve the built dist/ locally
 pnpm test                         # vitest, watch mode
-pnpm exec vitest run              # vitest, single run (42 tests)
+pnpm exec vitest run              # vitest, single run (115 tests)
 pnpm exec vitest run src/config   # one directory
 pnpm lint                         # eslint
 ```
@@ -189,7 +189,28 @@ The Choreo gateway owns TLS, CORS and organizer token validation.
 - **`jsdom` is pinned to 26.x.** jsdom 27 requires `require(esm)`, which lands
   in Node 20.19. Raise it once the team's Node floor moves.
 - Maps are `react-leaflet` + OpenStreetMap tiles, with no API key, per the
-  design spec.
+  design spec. Leaflet measures the DOM, which jsdom does not lay out, so
+  `vitest.setup.ts` stubs the whole module — add a stub there when a page starts
+  using a react-leaflet component the mock does not list yet.
+- **A3 and A5 send whole sets, never deltas.** Reordering posts the full
+  permutation, attaching a task posts the waypoint's complete task list, and
+  saving a vehicle posts its complete crew — those endpoints replace rather than
+  merge, so a partial list would silently drop legs, detach tasks, or delete
+  crew members.
+- **The live socket sends its token as a subprotocol.**
+  `new WebSocket(url, ["rally-bearer", idToken])` — a browser can set no header
+  on a handshake, and a query-string token would land in the backend's request
+  log and the browser's history. `useEventSocket` reconnects with backoff and
+  calls `onReconnect` so the page can refetch its snapshot; the hub keeps no
+  history, so anything broadcast while the socket was down is gone.
+- **`useAsgardeo()` returns a new `getIdToken` every render.** Anything holding
+  it in an effect dependency array rebuilds on each render — for the socket that
+  was a reconnect storm. Keep it in a ref, synced in an effect (never during
+  render; the lint rule enforces that).
+- **The CSV export is a `fetch`, not a link.** The endpoint needs the bearer
+  token, and a browser-initiated navigation (`<a href>`, `window.open`) would
+  arrive unauthenticated. It goes through `useAuthApiClient` and reaches the
+  browser as a blob via `utils/csv.ts`.
 
 ## Troubleshooting
 

@@ -355,6 +355,21 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Waypoint" }
         "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [Routes]
+      summary: Remove a waypoint from its route.
+      description: >
+        The remaining waypoints are renumbered so the sequence stays gap-free —
+        the in-car runtime walks the order to decide what is next, so a hole
+        would strand a crew. Task attachments go with the waypoint; the tasks
+        themselves stay in the event's library.
+      responses:
+        "200":
+          description: The route, renumbered, without the deleted waypoint.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Route" }
+        "404": { $ref: "#/components/responses/NotFound" }
 
   /waypoints/{waypointId}/tasks:
     parameters:
@@ -506,6 +521,9 @@ paths:
     post:
       tags: [Vehicles]
       summary: Search the event's vehicles.
+      description: >
+        The total counts what the filter matched, not the whole fleet, so a
+        filtered table pages through its own results.
       requestBody:
         required: true
         content:
@@ -515,6 +533,17 @@ paths:
               properties:
                 offset: { type: integer }
                 limit: { type: integer }
+                filters:
+                  type: object
+                  properties:
+                    query:
+                      type: string
+                      description: >
+                        Matches the vehicle code or the team name, anywhere in
+                        the value and ignoring case. Wildcards are escaped.
+                    routeId:
+                      type: string
+                      description: Restricts the result to one course.
       responses:
         "200":
           description: A page of vehicles.
@@ -536,8 +565,11 @@ paths:
       summary: Provision vehicles from a CSV.
       description: |
         Columns, in order: `code,team_name,vehicle_type,contact_number,
-        route_name,crew_names`. Crew names are pipe-separated and the first
-        one listed holds the phone. Route names resolve to ids within the event.
+        route_name,crew_names`. `crew_names` holds `Name:phone` entries joined
+        by `|`, and the phone is required on **every** member — its last four
+        digits are what that person types to join the car, so a bare name would
+        import a roster that looks provisioned and strands someone at the start
+        line. Route names resolve to ids within the event.
 
         The whole file is validated before anything is written, and the insert
         runs in one transaction: a typo on line 80 leaves no vehicles behind.
@@ -615,6 +647,23 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Vehicle" }
         "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [Vehicles]
+      summary: Remove a wrongly provisioned vehicle.
+      description: >
+        For correcting provisioning, not for retiring a car mid-rally. Every
+        session, submission, score and alert hangs off the vehicle row by a
+        cascading foreign key, so this is refused with a 409 once the vehicle
+        has any session — deleting one then would erase a result rather than fix
+        a typo. The crew goes with the vehicle.
+      responses:
+        "204": { description: The vehicle and its crew were removed. }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: The vehicle has already run.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
 
   /vehicles/{vehicleId}/alerts:
     parameters:

@@ -21,6 +21,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/wso2-open-operations/wso2-motor-rally/backend/internal/httpx"
 	"github.com/wso2-open-operations/wso2-motor-rally/backend/internal/store"
@@ -169,23 +170,105 @@ func (r *sqlRepo) Update(ctx context.Context, v Vehicle) error {
 	return err
 }
 
-func (r *sqlRepo) Search(ctx context.Context, eventID string, page httpx.Page) ([]Vehicle, int, error) {
+func (r *sqlRepo) Search(
+	ctx context.Context, eventID string, filter SearchFilter, page httpx.Page,
+) ([]Vehicle, int, error) {
+	where, args := searchWhere(eventID, filter)
+
 	var total int
 	if err := r.db.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM vehicle WHERE event_id = ?", eventID).Scan(&total); err != nil {
+		"SELECT COUNT(*) FROM vehicle"+where, args...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count vehicles: %w", err)
 	}
 	if total == 0 {
 		return nil, 0, nil
 	}
 
-	const query = "SELECT " + vehicleColumns + " FROM vehicle WHERE event_id = ? ORDER BY code LIMIT ? OFFSET ?"
-	found, err := r.queryVehicles(ctx, query, eventID, page.Limit, page.Offset)
+	query := "SELECT " + vehicleColumns + " FROM vehicle" + where + " ORDER BY code LIMIT ? OFFSET ?"
+	found, err := r.queryVehicles(ctx, query, append(args, page.Limit, page.Offset)...)
 	if err != nil {
 		return nil, 0, err
 	}
 
 	return found, total, nil
+}
+
+// searchWhere builds the shared predicate for the count and the page, so the
+// two can never drift and report a total the rows do not match.
+func searchWhere(eventID string, filter SearchFilter) (string, []any) {
+	where := " WHERE event_id = ?"
+	args := []any{eventID}
+
+	if filter.Query != "" {
+		// LIKE, not full-text: the fleet is ~150 rows, and an organizer types a
+		// fragment ("087", "Dashers") rather than a whole word.
+		like := "%" + escapeLike(filter.Query) + "%"
+		where += " AND (code LIKE ? OR team_name LIKE ?)"
+		args = append(args, like, like)
+	}
+	if filter.RouteID != "" {
+		where += " AND route_id = ?"
+		args = append(args, filter.RouteID)
+	}
+
+	return where, args
+}
+
+// escapeLike neutralises the wildcards, so a code containing "%" or "_"
+// searches for itself rather than matching the fleet.
+func escapeLike(s string) string {
+	replacer := strings.NewReplacer(`\`, `\\`, "%", `\%`, "_", `\_`)
+
+	return replacer.Replace(s)
+}
+
+func (r *sqlRepo) Delete(ctx context.Context, id string) error {
+	// Crew, sessions and alerts cascade away with the row, so the guard against
+	// deleting a vehicle that has run has to hold at the moment of the delete —
+	// not a statement earlier. Service.Delete checks HasRun first for a helpful
+	// error, but a session created between that check and this statement would
+	// otherwise be destroyed along with its alerts and submissions. The join
+	// makes the check and the delete one statement, so there is no window.
+	const query = `
+		DELETE v FROM vehicle v
+		LEFT JOIN team_session s ON s.vehicle_id = v.id
+		WHERE v.id = ? AND s.id IS NULL`
+
+	result, err := r.db.ExecContext(ctx, query, id)
+	if err != nil {
+		return fmt.Errorf("delete vehicle %s: %w", id, err)
+	}
+
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read affected rows: %w", err)
+	}
+	if affected == 0 {
+		// Nothing was deleted: either the vehicle is gone, or it gained a
+		// session since the service checked. Say which.
+		hasRun, runErr := r.HasRun(ctx, id)
+		if runErr != nil {
+			return runErr
+		}
+		if hasRun {
+			return ErrHasRun
+		}
+
+		return ErrNotFound
+	}
+
+	return nil
+}
+
+func (r *sqlRepo) HasRun(ctx context.Context, vehicleID string) (bool, error) {
+	var exists int
+	err := r.db.QueryRowContext(ctx,
+		"SELECT EXISTS(SELECT 1 FROM team_session WHERE vehicle_id = ?)", vehicleID).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("count sessions of vehicle %s: %w", vehicleID, err)
+	}
+
+	return exists == 1, nil
 }
 
 func (r *sqlRepo) ListByEvent(ctx context.Context, eventID string) ([]Vehicle, error) {

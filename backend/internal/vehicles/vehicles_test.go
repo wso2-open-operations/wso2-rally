@@ -35,12 +35,16 @@ type fakeRepo struct {
 	stored    map[string]Vehicle
 	routes    map[string]string // name -> id
 	codeTaken bool
+	// raced marks vehicle ids that already have a session, which is what makes
+	// a delete a refused correction rather than an allowed one.
+	raced map[string]bool
 }
 
 func newFakeRepo() *fakeRepo {
 	return &fakeRepo{
 		stored: map[string]Vehicle{},
 		routes: map[string]string{"Inland": "route-inland", "Wetlands": "route-wetlands"},
+		raced:  map[string]bool{},
 	}
 }
 
@@ -74,8 +78,34 @@ func (f *fakeRepo) Update(_ context.Context, v Vehicle) error {
 	return nil
 }
 
-func (f *fakeRepo) Search(_ context.Context, eventID string, page httpx.Page) ([]Vehicle, int, error) {
+func (f *fakeRepo) Delete(_ context.Context, id string) error {
+	if _, ok := f.stored[id]; !ok {
+		return ErrNotFound
+	}
+	delete(f.stored, id)
+	return nil
+}
+
+func (f *fakeRepo) HasRun(_ context.Context, vehicleID string) (bool, error) {
+	return f.raced[vehicleID], nil
+}
+
+func (f *fakeRepo) Search(
+	_ context.Context, eventID string, filter SearchFilter, page httpx.Page,
+) ([]Vehicle, int, error) {
 	matched := f.byEvent(eventID)
+	if filter.Query != "" {
+		needle := strings.ToLower(filter.Query)
+		matched = slices.DeleteFunc(matched, func(v Vehicle) bool {
+			return !strings.Contains(strings.ToLower(v.Code), needle) &&
+				!strings.Contains(strings.ToLower(v.TeamName), needle)
+		})
+	}
+	if filter.RouteID != "" {
+		matched = slices.DeleteFunc(matched, func(v Vehicle) bool {
+			return v.RouteID != filter.RouteID
+		})
+	}
 	total := len(matched)
 	if page.Offset >= total {
 		return nil, total, nil
@@ -397,4 +427,78 @@ func TestService_ExportCSV_EmptyEventStillWritesHeader(t *testing.T) {
 	require.NoError(t, NewService(newFakeRepo()).ExportCSV(context.Background(), eventID, &out))
 
 	require.Equal(t, "code,team_name,vehicle_type,contact_number,route_name,crew_names\n", out.String())
+}
+
+// A vehicle that has already run carries its crew's score, submissions and
+// alerts behind cascading foreign keys, so deleting one would erase a result
+// rather than correct a typo.
+func TestService_Delete_RefusesAVehicleThatHasRun(t *testing.T) {
+	repo := newFakeRepo()
+	svc := NewService(repo)
+	ctx := context.Background()
+	vehicle, err := svc.Create(ctx, validInput())
+	require.NoError(t, err)
+	repo.raced[vehicle.ID] = true
+
+	err = svc.Delete(ctx, vehicle.ID)
+
+	require.ErrorIs(t, err, apperr.ErrConflict)
+	require.Contains(t, repo.stored, vehicle.ID, "the vehicle must survive a refused delete")
+}
+
+func TestService_Delete_RemovesAProvisioningMistake(t *testing.T) {
+	repo := newFakeRepo()
+	svc := NewService(repo)
+	ctx := context.Background()
+	vehicle, err := svc.Create(ctx, validInput())
+	require.NoError(t, err)
+
+	require.NoError(t, svc.Delete(ctx, vehicle.ID))
+
+	require.NotContains(t, repo.stored, vehicle.ID)
+}
+
+func TestService_Delete_UnknownIsNotFound(t *testing.T) {
+	err := NewService(newFakeRepo()).Delete(context.Background(), "0123456789abcdef0123456789abcdef")
+
+	require.ErrorIs(t, err, apperr.ErrNotFound)
+}
+
+// The organizer's screen lists a hundred and fifty cars, so finding one by
+// code or team name is the difference between a usable table and eight pages
+// of scrolling.
+func TestService_Search_FiltersByQueryAndRoute(t *testing.T) {
+	repo := newFakeRepo()
+	svc := NewService(repo)
+	ctx := context.Background()
+	seed := func(code, team, routeID string) {
+		in := validInput()
+		in.Code, in.TeamName, in.RouteID = code, team, routeID
+		_, err := svc.Create(ctx, in)
+		require.NoError(t, err)
+	}
+	seed("PKT-001", "Data Dashers", "route-inland")
+	seed("PKT-002", "Sync Squad", "route-wetlands")
+	seed("PKT-087", "Null Pointers", "route-inland")
+
+	page := httpx.Page{Offset: 0, Limit: 20}
+
+	byCode, total, err := svc.Search(ctx, eventID, SearchFilter{Query: "pkt-087"}, page)
+	require.NoError(t, err)
+	require.Equal(t, 1, total)
+	require.Equal(t, "PKT-087", byCode[0].Code)
+
+	byTeam, total, err := svc.Search(ctx, eventID, SearchFilter{Query: "squad"}, page)
+	require.NoError(t, err)
+	require.Equal(t, 1, total, "the query matches team name as well as code")
+	require.Equal(t, "PKT-002", byTeam[0].Code)
+
+	byRoute, total, err := svc.Search(ctx, eventID, SearchFilter{RouteID: "route-inland"}, page)
+	require.NoError(t, err)
+	require.Equal(t, 2, total)
+	require.Len(t, byRoute, 2)
+
+	_, total, err = svc.Search(ctx, eventID, SearchFilter{}, page)
+	require.NoError(t, err)
+	require.Equal(t, 3, total, "the zero filter matches every vehicle of the event")
 }

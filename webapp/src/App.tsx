@@ -22,6 +22,10 @@ import Error404Page from "@components/error/Error404Page";
 import ComingSoonPage from "@components/placeholder/ComingSoonPage";
 import EventsPage from "@features/events/pages/EventsPage";
 import EventSetupPage from "@features/events/pages/EventSetupPage";
+import RoutesPage from "@features/routes/pages/RoutesPage";
+import MonitorPage from "@features/monitor/pages/MonitorPage";
+import TasksPage from "@features/tasks/pages/TasksPage";
+import VehiclesPage from "@features/vehicles/pages/VehiclesPage";
 import { LoaderProvider } from "@context/linear-loader/LoaderContext";
 import { ErrorBannerProvider } from "@context/error-banner/ErrorBannerContext";
 import { SuccessBannerProvider } from "@context/success-banner/SuccessBannerContext";
@@ -43,23 +47,12 @@ export default function App(): JSX.Element {
                 <Route path=":eventId/setup" element={<EventSetupPage />} />
               </Route>
 
-              {/* Wireframes A3–A8 — routed so the sidebar never dead-ends. */}
-              <Route
-                path="routes"
-                element={<ComingSoonPage title="Routes" screen="A3" />}
-              />
-              <Route
-                path="tasks"
-                element={<ComingSoonPage title="Tasks" screen="A4" />}
-              />
-              <Route
-                path="vehicles"
-                element={<ComingSoonPage title="Vehicles" screen="A5" />}
-              />
-              <Route
-                path="monitor"
-                element={<ComingSoonPage title="Live Monitor" screen="A6" />}
-              />
+              <Route path="routes" element={<RoutesPage />} />
+              <Route path="tasks" element={<TasksPage />} />
+              <Route path="vehicles" element={<VehiclesPage />} />
+              <Route path="monitor" element={<MonitorPage />} />
+
+              {/* Wireframes A7–A8 — routed so the sidebar never dead-ends. */}
               <Route
                 path="leaderboard"
                 element={<ComingSoonPage title="Leaderboard" screen="A7" />}

@@ -28,6 +28,20 @@ import (
 	"slices"
 )
 
+// BearerSubprotocol is the WebSocket subprotocol that marks the *next* offered
+// subprotocol as the caller's bearer token.
+//
+// A browser cannot put a header on a WebSocket handshake — `new WebSocket(url,
+// protocols)` exposes no other channel — and the token must not travel in the
+// query string, where the request logger, the browser's history and every proxy
+// in between would record it. Offering `["rally-bearer", "<token>"]` keeps the
+// credential in a header, as an Authorization header would.
+//
+// Both ends depend on this: the auth middleware reads the token from here, and
+// the hub must echo the marker back on accept, because RFC 6455 lets a browser
+// close a connection that agreed on no subprotocol it offered.
+const BearerSubprotocol = "rally-bearer"
+
 // Kind distinguishes the two callers sharing this backend.
 type Kind string
 

@@ -32,6 +32,8 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+
+	"github.com/wso2-open-operations/wso2-motor-rally/backend/internal/authz"
 )
 
 const (
@@ -170,6 +172,12 @@ func (h *Hub) Dropped() int64 {
 func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request, topic string) {
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		OriginPatterns: h.originPatterns,
+		// A browser offers ["rally-bearer", "<token>"] because a WebSocket
+		// handshake carries no Authorization header. RFC 6455 lets it close a
+		// connection that agreed on none of the protocols it offered, so the
+		// marker is echoed back — and only the marker, never the token, which
+		// would otherwise appear in a response header.
+		Subprotocols: []string{authz.BearerSubprotocol},
 	})
 	if err != nil {
 		h.logger.Warn("websocket upgrade failed", "error", err, "topic", topic)
