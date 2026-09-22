@@ -14,10 +14,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-import { type JSX } from "react";
+import { useEffect, type JSX } from "react";
 import { Box, Typography } from "@wso2/oxygen-ui";
-import { Circle, MapContainer, Marker, TileLayer, useMapEvents } from "react-leaflet";
+import { Circle, MapContainer, Marker, TileLayer, useMap, useMapEvents } from "react-leaflet";
 import { getMapConfig } from "@config/mapConfig";
+
+/** Zoom the picker settles at once a boundary has a position. */
+const PLACED_ZOOM = 15;
 
 export interface MapPickerProps {
   lat: number | null;
@@ -44,6 +47,35 @@ function ClickCapture({
   useMapEvents({
     click: (event) => onChange({ lat: event.latlng.lat, lng: event.latlng.lng }),
   });
+
+  return null;
+}
+
+/**
+ * Pans the map when the pin moves from outside — typing a place name in A2, or
+ * loading an event that already has coordinates.
+ *
+ * Leaflet reads `MapContainer`'s `center` once, on mount, and ignores every
+ * later change. Without this the marker would jump to a searched place while the
+ * view stayed where it was, so the organizer would see an empty map and assume
+ * the search failed.
+ */
+function RecenterOnMove({
+  lat,
+  lng,
+  zoom,
+}: {
+  lat: number | null;
+  lng: number | null;
+  zoom: number;
+}): null {
+  const map = useMap();
+
+  useEffect(() => {
+    if (lat !== null && lng !== null) {
+      map.setView([lat, lng], Math.max(map.getZoom(), zoom));
+    }
+  }, [map, lat, lng, zoom]);
 
   return null;
 }
@@ -89,11 +121,12 @@ export default function MapPicker({
       >
         <MapContainer
           center={center}
-          zoom={isPlaced ? 15 : mapConfig.defaultZoom}
+          zoom={isPlaced ? PLACED_ZOOM : mapConfig.defaultZoom}
           scrollWheelZoom
           style={{ height: "100%", width: "100%" }}
         >
           <TileLayer attribution={mapConfig.attribution} url={mapConfig.tileUrl} />
+          <RecenterOnMove lat={lat} lng={lng} zoom={PLACED_ZOOM} />
           {!readOnly && <ClickCapture onChange={onChange} />}
           {isPlaced && (
             <>

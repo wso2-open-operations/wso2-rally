@@ -62,11 +62,16 @@ window.config = {
   // RALLY_MAP_DEFAULT_LAT    (default: 6.9271)
   // RALLY_MAP_DEFAULT_LNG    (default: 79.8612)
   // RALLY_MAP_DEFAULT_ZOOM   (default: 11)
+  // RALLY_GEOCODE_URL        (default: https://nominatim.openstreetmap.org)
+  //   Nominatim-compatible place lookup, for A2's "type a place, move the pin".
+  //   Keyless like the tiles. Point it at your own instance or a proxy if the
+  //   public one's usage policy becomes a constraint.
   //
   // RALLY_MAP_TILE_URL: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
   // RALLY_MAP_DEFAULT_LAT: 6.9271,
   // RALLY_MAP_DEFAULT_LNG: 79.8612,
   // RALLY_MAP_DEFAULT_ZOOM: 11,
+  // RALLY_GEOCODE_URL: "https://nominatim.openstreetmap.org",
 
   // ── UI theme ──────────────────────────────────────────────────────────────
   //

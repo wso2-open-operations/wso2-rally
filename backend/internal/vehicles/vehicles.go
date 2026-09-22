@@ -75,9 +75,13 @@ type CrewMember struct {
 	ID        string
 	VehicleID string
 	Name      string
-	// PhoneNumber is required. Its last four digits are what this member types
-	// to join their car, so a blank one would leave them unable to take part —
-	// and organizers call it when a car goes quiet.
+	// Email is required. The in-car app is embedded in the super app, so a
+	// joining phone presents an Asgardeo token and POST /sessions/join matches
+	// its email claim against this — a member without one could never start.
+	// Stored lowercased and trimmed so that match is a plain comparison.
+	Email string
+	// PhoneNumber is required so an organizer can call a car that goes quiet.
+	// It stopped being a credential when the super app took over identity.
 	PhoneNumber   string
 	Role          CrewRole
 	OriginCountry string
@@ -112,6 +116,7 @@ type CreateVehicleInput struct {
 // CrewMemberInput is one crew member on a create or update request.
 type CrewMemberInput struct {
 	Name          string
+	Email         string
 	PhoneNumber   string
 	Role          CrewRole
 	OriginCountry string
@@ -119,11 +124,12 @@ type CrewMemberInput struct {
 
 // MinPhoneDigits is the fewest digits a crew phone number may carry.
 //
-// The join check compares the last four, so anything shorter could not identify
-// its owner. Four is the floor rather than a full Sri Lankan number length
-// because organizers paste numbers in whatever shape their spreadsheet holds,
-// and rejecting a valid number on formatting grounds would be worse than
-// accepting a short one.
+// It is no longer a credential — the super app authenticates the person — but a
+// number too short to dial is no use to an organizer chasing a silent car.
+// Four is the floor rather than a full Sri Lankan number length because
+// organizers paste numbers in whatever shape their spreadsheet holds, and
+// rejecting a valid number on formatting grounds would be worse than accepting
+// a short one.
 const MinPhoneDigits = 4
 
 // UpdateVehicleInput is a PATCH: nil fields are left untouched. A non-nil Crew

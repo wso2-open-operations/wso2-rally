@@ -232,9 +232,12 @@ func seedFleet(t *testing.T, db *sql.DB, eventID, prefix string, vehicles, crewP
 		require.NoError(t, err)
 
 		for j := 1; j <= crewPer; j++ {
+			crewID := store.NewID()
 			_, err := db.Exec(
-				"INSERT INTO crew_member (id, vehicle_id, name, phone_number) VALUES (?, ?, ?, ?)",
-				store.NewID(), vehicleID, fmt.Sprintf("Member %d", j), fmt.Sprintf("07700900%03d", j))
+				"INSERT INTO crew_member (id, vehicle_id, name, email, phone_number) VALUES (?, ?, ?, ?, ?)",
+				crewID, vehicleID, fmt.Sprintf("Member %d", j),
+				// Unique per row: crew_member is unique on (vehicle_id, email).
+				fmt.Sprintf("member-%s@wso2.com", crewID), fmt.Sprintf("07700900%03d", j))
 			require.NoError(t, err)
 		}
 	}

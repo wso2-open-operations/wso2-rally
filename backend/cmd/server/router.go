@@ -90,9 +90,6 @@ func newRouter(d deps) http.Handler {
 	)
 	sessionsHandler := sessions.NewHandler(sessionsService, d.logger)
 
-	// Binding runs before a crew has any credential: it is what issues one.
-	sessionsHandler.RegisterPublic(r)
-
 	// Live updates, in their own group: a browser can set no Authorization
 	// header on a handshake, so this is the one route whose middleware also
 	// reads the credential from the WebSocket subprotocol. Scoping it by mount
@@ -103,11 +100,17 @@ func newRouter(d deps) http.Handler {
 
 		// The handler checks the caller may listen to the topic it asked for
 		// before upgrading.
-		r.Get("/ws", wsHandler(hub, d.logger))
+		r.Get("/ws", wsHandler(d.cfg, hub, d.logger))
 	})
 
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.Auth(d.cfg, d.organizer))
+
+		// Joining is what turns the super app's identity into a team token, so
+		// it sits under Auth but above every role gate: the caller is a crew
+		// member with no organizer group, and the roster decides, not a role.
+		sessionsHandler.RegisterJoin(r)
+
 
 		// Readable by either identity. Mounted above the role gates because
 		// chi cannot carry the same path in two sibling groups; the handler
@@ -123,7 +126,7 @@ func newRouter(d deps) http.Handler {
 
 		// Organizer surface.
 		r.Group(func(r chi.Router) {
-			r.Use(middleware.RequireOrganizer)
+			r.Use(middleware.RequireOrganizer(d.cfg))
 
 			r.Get("/users/me", currentUser)
 			events.NewHandler(events.NewService(events.NewRepo(d.db)), d.logger).Register(r)

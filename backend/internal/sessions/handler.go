@@ -40,10 +40,13 @@ func NewHandler(service *Service, logger *slog.Logger) *Handler {
 	return &Handler{service: service, logger: logger}
 }
 
-// RegisterPublic adds the endpoints that run before a phone has any credential:
-// joining is what issues the team token, and a phone needs the vehicle and crew
-// lists to fill in the join form.
-func (h *Handler) RegisterPublic(r chi.Router) {
+// RegisterJoin adds the one endpoint that runs before a phone has a *team*
+// token but after the super app has authenticated the person holding it.
+//
+// It is mounted under Auth but outside RequireOrganizer: the caller is a crew
+// member, not staff, so they carry no organizer group. The roster decides
+// whether they may join, not a role.
+func (h *Handler) RegisterJoin(r chi.Router) {
 	r.Post("/sessions/join", h.join)
 }
 
@@ -67,10 +70,20 @@ func (h *Handler) join(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The identity comes from the verified token, never from the body — a phone
+	// that could name its own email could join any car on the roster.
+	identity, ok := authz.IdentityFrom(r.Context())
+	if !ok || !identity.IsOrganizer() {
+		// Not "you are not staff": a team token means this phone has already
+		// joined and should be using /sessions/me, and no identity at all means
+		// the super app never handed one over.
+		httpx.WriteError(w, http.StatusForbidden, httpx.MsgForbidden)
+		return
+	}
+
 	result, err := h.service.Join(r.Context(), JoinInput{
-		VehicleID:    req.VehicleID,
-		CrewMemberID: req.CrewMemberID,
-		PhoneLast4:   req.PhoneLast4,
+		VehicleID:   req.VehicleID,
+		CallerEmail: identity.Email,
 	})
 	if err != nil {
 		httpx.WriteDomainError(w, r, h.logger, err)

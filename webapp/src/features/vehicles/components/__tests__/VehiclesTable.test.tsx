@@ -24,6 +24,7 @@ import type { Vehicle } from "@/types/vehicle";
 const crew = (name: string, phoneNumber: string) => ({
   id: `c-${name}`,
   name,
+  email: `${name.toLowerCase()}@wso2.com`,
   phoneNumber,
   role: "node" as const,
   originCountry: "LK",

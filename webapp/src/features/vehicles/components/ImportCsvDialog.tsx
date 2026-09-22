@@ -96,9 +96,10 @@ function ImportForm({
             </Typography>
             <Typography color="text.secondary" variant="caption">
               <code>route_name</code> matches a route of this event by name.{" "}
-              <code>crew_names</code> holds <code>Name:phone</code> entries joined
-              by <code>|</code> — the phone is required, because its last four
-              digits are how that person joins the car.
+              <code>crew_names</code> holds <code>Name:email:phone</code> entries
+              joined by <code>|</code>. All three are required: the WSO2 email is
+              how the in-car app recognises that person, and the phone is how you
+              reach the car if it goes quiet.
             </Typography>
           </Box>
 

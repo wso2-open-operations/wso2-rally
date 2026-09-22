@@ -104,7 +104,7 @@ func TestRepo_Update_ReplacesCrew(t *testing.T) {
 	created, err := svc.Create(ctx, in)
 	require.NoError(t, err)
 	newCrew := []CrewMemberInput{
-		{Name: "Kamala", PhoneNumber: "0779876543", Role: RoleNavigator},
+		{Name: "Kamala", Email: "kamala@wso2.com", PhoneNumber: "0779876543", Role: RoleNavigator},
 	}
 
 	_, err = svc.Update(ctx, created.ID, UpdateVehicleInput{Crew: &newCrew})

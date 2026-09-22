@@ -22,6 +22,13 @@ export interface MapConfig {
   /** Where the picker opens before an organizer has dropped a pin. */
   defaultCenter: { lat: number; lng: number };
   defaultZoom: number;
+  /**
+   * Base URL of a Nominatim-compatible geocoder, no trailing slash.
+   *
+   * Keyless, like the tiles. Overridable so a deployment can point at its own
+   * instance — or at a backend proxy — without a rebuild.
+   */
+  geocodeUrl: string;
 }
 
 // OpenStreetMap needs no API key, which is why the spec picks it. These are
@@ -35,6 +42,7 @@ const DEFAULT_ATTRIBUTION =
 const DEFAULT_LAT = 6.9271;
 const DEFAULT_LNG = 79.8612;
 const DEFAULT_ZOOM = 11;
+const DEFAULT_GEOCODE_URL = "https://nominatim.openstreetmap.org";
 
 /**
  * Reads the map tile settings.
@@ -55,5 +63,6 @@ export function getMapConfig(): MapConfig {
       lng: config?.RALLY_MAP_DEFAULT_LNG ?? DEFAULT_LNG,
     },
     defaultZoom: config?.RALLY_MAP_DEFAULT_ZOOM ?? DEFAULT_ZOOM,
+    geocodeUrl: (config?.RALLY_GEOCODE_URL || DEFAULT_GEOCODE_URL).replace(/\/+$/, ""),
   };
 }

@@ -64,7 +64,7 @@ func (r *sqlRepo) JoinTargetOf(ctx context.Context, vehicleID string) (JoinTarge
 
 func (r *sqlRepo) crewRosterOf(ctx context.Context, vehicleID string) ([]CrewRosterMember, error) {
 	const query = `
-		SELECT id, name, phone_number, role
+		SELECT id, name, email, phone_number, role
 		FROM crew_member WHERE vehicle_id = ? ORDER BY name`
 
 	rows, err := r.db.QueryContext(ctx, query, vehicleID)
@@ -76,7 +76,7 @@ func (r *sqlRepo) crewRosterOf(ctx context.Context, vehicleID string) ([]CrewRos
 	var roster []CrewRosterMember
 	for rows.Next() {
 		var member CrewRosterMember
-		if err := rows.Scan(&member.ID, &member.Name, &member.PhoneNumber, &member.Role); err != nil {
+		if err := rows.Scan(&member.ID, &member.Name, &member.Email, &member.PhoneNumber, &member.Role); err != nil {
 			return nil, fmt.Errorf("scan crew member: %w", err)
 		}
 		roster = append(roster, member)

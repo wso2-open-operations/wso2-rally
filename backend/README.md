@@ -41,6 +41,13 @@ make docker-db
 If this fails with *"Rancher Desktop is not running"*, start Rancher Desktop (or
 Docker Desktop) first — nothing else in this section works without a database.
 
+If you already have a volume from before the `crew_member.email` migration was
+folded back into `0001`, re-create it (`docker compose down -v` then
+`make docker-db` again). `schema_migrations` already reads version 1 on that
+volume, so `golang-migrate` will not notice `0001` changed underneath it —
+`make run` will report success while the schema still has no `email` column,
+and `POST /sessions/join` will fail against it.
+
 **3. Run the server.** Migrations apply on boot, then it listens on `:8080`.
 
 ```bash
@@ -175,10 +182,13 @@ else to the organizer validator. Requests then pass a role gate:
 > explicit `false`: nothing but review stops that value reaching a deployed
 > environment.
 
-`POST /sessions/join` is the only unauthenticated write: joining a vehicle is
-what authenticates a crew, so there is no credential to present beforehand. It
-is guarded instead by the last four digits of the member's own phone number,
-checked against the roster.
+`POST /sessions/join` is the hinge between the two: it takes an **organizer-issued
+Asgardeo token** and returns a **team token**. The in-car app is embedded in the
+WSO2 Open Super App, so a phone already holds an Asgardeo token minted for the
+rally's `clientId`, and the crew member is resolved from its `email` claim
+against `crew_member.email` on the chosen vehicle's roster. It is mounted under
+`Auth` but *outside* `RequireOrganizer` — the caller is a participant with no
+organizer group, and the roster decides, not a role.
 
 ## How a rally runs
 
@@ -187,8 +197,9 @@ checked against the roster.
    and crews (by hand or by CSV).
 2. Publishing the event opens it to crews. Both geofences must be placed first,
    or the start could never lock and arrival could never be detected.
-3. Each crew member picks their vehicle, picks their own name, and types the
-   last four digits of their own number. `POST /sessions/join` mints that
+3. Each crew member opens the rally from the super app and picks their vehicle —
+   nothing asks who they are, because the host already signed them in and their
+   address is on the roster. `POST /sessions/join` mints that
    phone's team token. **Every phone in a car shares one session**: the first to
    arrive creates it and the rest find it, so a crew cannot end up split across
    two runs. One live session per vehicle is enforced by a unique index on
@@ -253,6 +264,12 @@ in-memory fake and the SQL is tested separately against a real MySQL.
 
 ## Things worth knowing before you change them
 
+- **An organizer token is not proof of being staff.** The in-car app is embedded in the WSO2 Open Super App,
+  so every participant holds a valid Asgardeo token and `middleware.Auth` resolves it to an
+  organizer-*kind* identity. `RequireOrganizer` therefore checks a group as well —
+  `ORGANIZER_ROLE`, or `ADMIN_ROLE` if that is unset, which fails closed. `RequireAdmin` still gates the
+  actions that change an event's shape. Configure a read-only organizer group in any real deployment, or
+  only admins can open the portal.
 - **`trigger` is a MySQL reserved word.** Every query touching `task.trigger`
   backticks it.
 - **Task answers are stripped for crews.** `GET /tasks/{id}` is read by both
@@ -273,13 +290,20 @@ in-memory fake and the SQL is tested separately against a real MySQL.
   `DELETE /vehicles/{id}` checks `team_session` first and returns 409 if the car
   has any. The delete exists to fix provisioning, never to retire a car
   mid-rally.
+- **`isPlausibleMove` denies when it cannot judge.** With zero or negative
+  elapsed time — two fixes stamped the same instant, or a clock that stepped
+  backwards — it accepts only a fix that has barely moved
+  (`sameInstantToleranceM`, one second of travel). It used to accept *any*
+  distance in that case, which both hid a real teleport and made the ping test
+  flaky whenever two pings landed inside one clock tick.
 - **A timestamp you do arithmetic on needs `TIMESTAMP(3)`.** A bare `TIMESTAMP`
   has no fractional seconds and MySQL *rounds* to the nearest second on write,
   so a value can come back up to half a second in the **future**. That is
   invisible for a display column and poison for a computed one: it silently
   disarmed the anti-teleport check on `last_ping_at` (a negative elapsed time
   reads as a backwards clock, which accepts any jump) and rounded two crews
-  finishing 300 ms apart into a leaderboard dead heat. `0002` fixes those two;
+  finishing 300 ms apart into a leaderboard dead heat. `team_session.finished_at`
+  and `last_ping_at` carry `(3)` for those two reasons;
   the rest are display or audit values and stay at second resolution.
 - **Broadcasts are best-effort.** A subscriber that stops reading loses
   messages rather than blocking the crew whose submission produced them; the

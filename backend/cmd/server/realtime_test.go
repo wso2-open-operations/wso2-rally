@@ -22,10 +22,17 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/wso2-open-operations/wso2-motor-rally/backend/internal/authz"
+	"github.com/wso2-open-operations/wso2-motor-rally/backend/internal/config"
 )
 
 func TestMaySubscribe(t *testing.T) {
-	organizer := authz.Identity{Kind: authz.KindOrganizer, UserID: "u1"}
+	cfg := config.Config{OrganizerRole: "rally-organizer", AdminRole: "rally-admin"}
+	organizer := authz.Identity{Kind: authz.KindOrganizer, UserID: "u1", Groups: []string{"rally-organizer"}}
+	admin := authz.Identity{Kind: authz.KindOrganizer, UserID: "u2", Groups: []string{"rally-admin"}}
+	// A crew member's phone holds a perfectly valid Asgardeo token too, so it
+	// resolves to KindOrganizer exactly like staff — kind alone cannot be what
+	// keeps them off another car's session or another event's monitor.
+	crewWithOrganizerKindToken := authz.Identity{Kind: authz.KindOrganizer, UserID: "u3"}
 	crew := authz.Identity{Kind: authz.KindTeam, SessionID: "sess-1"}
 
 	tests := []struct {
@@ -36,7 +43,10 @@ func TestMaySubscribe(t *testing.T) {
 	}{
 		{"organizer watches an event", organizer, "event:e1", true},
 		{"organizer watches a session", organizer, "session:sess-1", true},
+		{"admin watches an event", admin, "event:e1", true},
 		{"organizer with an unknown topic", organizer, "everything", false},
+		{"organizer-kind token with no organizer group is refused", crewWithOrganizerKindToken, "event:e1", false},
+		{"organizer-kind token with no organizer group cannot snoop a session either", crewWithOrganizerKindToken, "session:sess-1", false},
 		{"crew watches its own session", crew, "session:sess-1", true},
 		// The other crew's topic carries their cipher and their position.
 		{"crew watches another session", crew, "session:sess-2", false},
@@ -46,7 +56,7 @@ func TestMaySubscribe(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			require.Equal(t, tt.want, maySubscribe(tt.identity, tt.topic))
+			require.Equal(t, tt.want, maySubscribe(tt.identity, tt.topic, cfg))
 		})
 	}
 }

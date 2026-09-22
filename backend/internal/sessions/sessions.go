@@ -46,14 +46,15 @@ var (
 	// ErrEventNotActive means the event has not been published, so crews
 	// cannot join it yet.
 	ErrEventNotActive = fmt.Errorf("%w: this event is not open for crews yet", apperr.ErrConflict)
-	// ErrCrewMemberNotOnVehicle means the chosen member is not on this
-	// vehicle's roster.
-	ErrCrewMemberNotOnVehicle = fmt.Errorf("%w: that crew member is not in this vehicle", apperr.ErrNotFound)
-	// ErrPhoneMismatch means the last four digits did not match the roster.
+	// ErrNotOnRoster means the signed-in caller is not on the roster of the
+	// vehicle they picked.
 	//
-	// Deliberately vague about which part was wrong, and never echoes the
-	// number on file.
-	ErrPhoneMismatch = fmt.Errorf("%w: those last four digits do not match our roster for that name", apperr.ErrForbidden)
+	// Deliberately about the *vehicle*, not the person: being signed in proves
+	// who they are, so the only thing left to be wrong is the car. Saying so
+	// points them at the fix instead of at their own account.
+	ErrNotOnRoster = fmt.Errorf(
+		"%w: you are not on the crew list for that vehicle — check you picked the right one",
+		apperr.ErrForbidden)
 	// ErrDeviceNotFound means the token names a phone that is no longer in the
 	// session — its row was removed, so the phone must join again.
 	ErrDeviceNotFound = fmt.Errorf("%w: device", apperr.ErrNotFound)
@@ -106,10 +107,14 @@ type Session struct {
 }
 
 // CrewRosterMember is one person on a vehicle's roster, as the join check needs
-// them: the name a phone picks, and the number that proves the pick.
+// them: the address the super app authenticated, and the name to show once it
+// matches.
 type CrewRosterMember struct {
-	ID          string
-	Name        string
+	ID    string
+	Name  string
+	Email string
+	// PhoneNumber is no longer part of authentication — the super app is. It is
+	// carried so an organizer can call a car that goes quiet.
 	PhoneNumber string
 	Role        string
 }
@@ -152,11 +157,11 @@ const SharingWindow = 90 * time.Second
 
 // JoinInput is a request to put one crew member's phone into their car's run.
 type JoinInput struct {
-	VehicleID    string
-	CrewMemberID string
-	// PhoneLast4 is the last four digits of that member's own number, typed on
-	// the join screen. It is the whole of participant authentication.
-	PhoneLast4 string
+	VehicleID string
+	// CallerEmail is the address on the super app's Asgardeo token. It comes
+	// from the verified identity, never from the request body — a phone that
+	// could name its own email could join any car it liked.
+	CallerEmail string
 }
 
 // JoinResult is what a phone gets back when it joins.

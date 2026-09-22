@@ -18,6 +18,7 @@ package middleware
 
 import (
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/wso2-open-operations/wso2-motor-rally/backend/internal/authz"
@@ -84,10 +85,34 @@ func authenticate(
 	}
 }
 
-// RequireOrganizer rejects anyone who is not staff. Mount it on every
-// organizer route group, under Auth.
-func RequireOrganizer(next http.Handler) http.Handler {
-	return requireKind(authz.KindOrganizer, next)
+// RequireOrganizer rejects anyone who is not staff. Mount it on every organizer
+// route group, under Auth.
+//
+// It checks the group as well as the token kind. Since the in-car app is
+// embedded in the super app, a crew member arrives holding a perfectly valid
+// Asgardeo token, which Auth resolves to an organizer-kind identity — so kind
+// alone would admit every participant to the fleet roster and the live monitor.
+// Admin *actions* were always group-gated; this closes the read surface.
+func RequireOrganizer(cfg config.Config) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			identity, ok := authz.IdentityFrom(r.Context())
+			if !ok {
+				httpx.WriteUnauthorized(w)
+				return
+			}
+			// Either group admits: an admin is an organizer without having to
+			// be listed in both. Note this is *any*, not authz.CheckRoles,
+			// which requires every role it is given.
+			if !identity.IsOrganizer() ||
+				!HasAnyRole(identity.Groups, cfg.OrganizerRole, cfg.AdminRole) {
+				httpx.WriteError(w, http.StatusForbidden, httpx.MsgForbidden)
+				return
+			}
+
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 // RequireTeam rejects anyone who is not an in-car phone.
@@ -113,6 +138,26 @@ func RequireAdmin(cfg config.Config) func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// HasAnyRole reports whether have contains at least one of the named roles.
+//
+// Empty role names are skipped rather than matched: an unset ORGANIZER_ROLE must
+// not turn into a group everybody is in. If every candidate is empty this
+// returns false, so a misconfigured deployment locks the surface rather than
+// opening it.
+//
+// Exported: wsHandler's own organizer branch needs the identical check, since
+// an Asgardeo token resolves to organizer *kind* regardless of group, and
+// /ws mounts under Auth rather than RequireOrganizer.
+func HasAnyRole(have []string, anyOf ...string) bool {
+	for _, role := range anyOf {
+		if role != "" && slices.Contains(have, role) {
+			return true
+		}
+	}
+
+	return false
 }
 
 func requireKind(kind authz.Kind, next http.Handler) http.Handler {

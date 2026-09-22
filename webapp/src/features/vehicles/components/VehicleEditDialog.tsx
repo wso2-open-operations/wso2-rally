@@ -34,6 +34,7 @@ import {
   VEHICLE_STATUS_META,
   VEHICLE_TYPES,
   digitCount,
+  looksLikeEmail,
   type CreateVehicleRequest,
   type CrewMember,
   type Vehicle,
@@ -119,10 +120,22 @@ function VehicleForm({
     // it here saves the organizer a round trip that discards their typing.
     const incomplete = crew.findIndex(
       (member) =>
-        member.name.trim() === "" || digitCount(member.phoneNumber) < MIN_PHONE_DIGITS,
+        member.name.trim() === "" ||
+        !looksLikeEmail(member.email) ||
+        digitCount(member.phoneNumber) < MIN_PHONE_DIGITS,
     );
     if (incomplete !== -1) {
-      found.crew = `Crew member ${incomplete + 1} needs a name and a phone number of at least ${MIN_PHONE_DIGITS} digits.`;
+      found.crew = `Crew member ${incomplete + 1} needs a name, a WSO2 email address, and a phone number of at least ${MIN_PHONE_DIGITS} digits.`;
+    }
+
+    // Two people in one car cannot share an address: a join could not tell
+    // which of them was calling.
+    const addresses = crew.map((member) => member.email.trim().toLowerCase());
+    const duplicate = addresses.findIndex(
+      (email, at) => email !== "" && addresses.indexOf(email) !== at,
+    );
+    if (duplicate !== -1) {
+      found.crew = `Two crew members share the address ${addresses[duplicate]}.`;
     }
 
     return found;
@@ -147,6 +160,7 @@ function VehicleForm({
       // wholesale, so a partial list would delete the members left out.
       crew: crew.map((member) => ({
         name: member.name.trim(),
+        email: member.email.trim().toLowerCase(),
         phoneNumber: member.phoneNumber.trim(),
         role: member.role,
         originCountry: member.originCountry.trim(),

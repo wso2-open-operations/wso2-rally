@@ -33,14 +33,17 @@ var csvHeader = []string{"code", "team_name", "vehicle_type", "contact_number", 
 // in a spreadsheet, where a comma would need quoting.
 const crewSeparator = "|"
 
-// crewPhoneSeparator splits one crew entry into name and phone number. A colon
-// cannot appear in either, unlike a comma (which the CSV owns) or a space
-// (which names contain).
-const crewPhoneSeparator = ":"
+// crewFieldSeparator splits one crew entry into name, email and phone number. A
+// colon cannot appear in any of the three, unlike a comma (which the CSV owns)
+// or a space (which names contain).
+const crewFieldSeparator = ":"
+
+// crewEntryFields is how many colon-separated fields one crew entry carries.
+const crewEntryFields = 3
 
 // crewEntryShape is how the crew column is described back to an organizer whose
 // file was rejected.
-const crewEntryShape = `"Name:0771234567", separated by "|"`
+const crewEntryShape = `"Name:name@wso2.com:0771234567", separated by "|"`
 
 // utf8BOM is the byte-order mark Excel prepends when saving a UTF-8 CSV.
 const utf8BOM = "\ufeff"
@@ -128,9 +131,10 @@ func checkHeader(header []string) error {
 	return nil
 }
 
-// splitCrew parses the crew_names column, whose entries are Name:phone.
+// splitCrew parses the crew_names column, whose entries are Name:email:phone.
 //
-// The phone is not optional. A member without one could never join their car, so
+// None of the three is optional. The email is what the in-car app recognises a
+// member by, and the phone is how an organizer reaches a silent car, so
 // accepting a bare name here would import a roster that looks provisioned and
 // silently leaves someone unable to take part on rally morning. The line number
 // is the caller's to add.
@@ -149,20 +153,29 @@ func splitCrew(field string) ([]CrewMemberInput, error) {
 			continue
 		}
 
-		name, phone, found := strings.Cut(entry, crewPhoneSeparator)
-		if !found {
+		fields := strings.SplitN(entry, crewFieldSeparator, crewEntryFields)
+		if len(fields) != crewEntryFields {
 			return nil, apperr.Validationf(
-				"crew entry %q needs a phone number, written %s", entry, crewEntryShape)
+				"crew entry %q needs a name, an email and a phone number, written %s", entry, crewEntryShape)
 		}
-		name, phone = strings.TrimSpace(name), strings.TrimSpace(phone)
+		name := strings.TrimSpace(fields[0])
+		email := strings.TrimSpace(fields[1])
+		phone := strings.TrimSpace(fields[2])
 		if name == "" {
 			return nil, apperr.Validationf("crew entry %q has no name", entry)
+		}
+		// Shape only here; buildCrew does the real validation and the
+		// normalizing, so an imported roster and a hand-entered one obey exactly
+		// the same rules.
+		if email == "" {
+			return nil, apperr.Validationf(
+				"crew entry %q has no email address, written %s", entry, crewEntryShape)
 		}
 		if err := validatePhoneNumber(name, phone); err != nil {
 			return nil, err
 		}
 
-		crew = append(crew, CrewMemberInput{Name: name, PhoneNumber: phone})
+		crew = append(crew, CrewMemberInput{Name: name, Email: email, PhoneNumber: phone})
 	}
 
 	return crew, nil
@@ -179,7 +192,8 @@ func writeCSV(w io.Writer, list []Vehicle, routeNames map[string]string) error {
 	for _, v := range list {
 		entries := make([]string, 0, len(v.Crew))
 		for _, member := range v.Crew {
-			entries = append(entries, member.Name+crewPhoneSeparator+member.PhoneNumber)
+			entries = append(entries,
+				member.Name+crewFieldSeparator+member.Email+crewFieldSeparator+member.PhoneNumber)
 		}
 		record := []string{
 			v.Code, v.TeamName, v.VehicleType, v.ContactNumber,

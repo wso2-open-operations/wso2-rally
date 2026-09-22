@@ -23,14 +23,18 @@ export type CrewRole = "navigator" | "node";
 /**
  * One person in a vehicle. Mirrors the backend `CrewMemberDTO`.
  *
- * `phoneNumber` is required, not decoration: its last four digits are what this
- * member types to join their car, so a blank one leaves them unable to take
- * part on rally morning.
+ * `email` is required, not decoration: the in-car app is embedded in the WSO2
+ * Open Super App, which authenticates the person, and `POST /sessions/join`
+ * matches that identity against this address. A blank one leaves them unable to
+ * start on rally morning. `phoneNumber` is required too, but only so an
+ * organizer can call a car that goes quiet.
  */
 export interface CrewMember {
   /** Empty for a row the organizer has just added and not yet saved. */
   id: string;
   name: string;
+  /** The WSO2 address the super app signs this member in with. */
+  email: string;
   phoneNumber: string;
   role: CrewRole;
   originCountry: string;
@@ -64,6 +68,7 @@ export interface CreateVehicleRequest {
 /** One crew member on a create or update body — no id; the server assigns them. */
 export interface CrewMemberRequest {
   name: string;
+  email: string;
   phoneNumber: string;
   role: CrewRole;
   originCountry: string;
@@ -123,6 +128,24 @@ export const VEHICLE_STATUS_META: Record<
 export const MIN_PHONE_DIGITS = 4;
 
 /**
+ * Checks an address the same shallow way the backend does — one `@` with
+ * something either side, and no spaces.
+ *
+ * Deliberately not a strict RFC pattern: a stricter rule rejects real
+ * addresses, and the address is actually proved by Asgardeo when the member
+ * joins, not by this form.
+ *
+ * @param {string} email - The address as typed.
+ * @returns {boolean} Whether it could be an email address.
+ */
+export function looksLikeEmail(email: string): boolean {
+  const trimmed = email.trim();
+  const [local, domain, ...rest] = trimmed.split("@");
+
+  return rest.length === 0 && Boolean(local) && Boolean(domain) && !/\s/.test(trimmed);
+}
+
+/**
  * Counts the digits in a phone number, ignoring spaces, dashes and a leading
  * `+` — organizers paste numbers in whatever shape their spreadsheet holds.
  *
@@ -137,6 +160,7 @@ export function digitCount(phoneNumber: string): number {
 export const emptyCrewMember = (): CrewMember => ({
   id: "",
   name: "",
+  email: "",
   phoneNumber: "",
   role: "node",
   originCountry: "",

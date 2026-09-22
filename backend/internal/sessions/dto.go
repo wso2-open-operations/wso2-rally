@@ -75,9 +75,7 @@ type SessionStateDTO struct {
 
 // JoinRequest is the POST /sessions/join body.
 type JoinRequest struct {
-	VehicleID    string `json:"vehicleId"`
-	CrewMemberID string `json:"crewMemberId"`
-	PhoneLast4   string `json:"phoneLast4"`
+	VehicleID string `json:"vehicleId"`
 }
 
 // DeviceDTO is one phone in the car.

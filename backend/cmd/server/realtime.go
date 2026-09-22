@@ -26,7 +26,9 @@ import (
 
 	"github.com/wso2-open-operations/wso2-motor-rally/backend/internal/alerts"
 	"github.com/wso2-open-operations/wso2-motor-rally/backend/internal/authz"
+	"github.com/wso2-open-operations/wso2-motor-rally/backend/internal/config"
 	"github.com/wso2-open-operations/wso2-motor-rally/backend/internal/httpx"
+	"github.com/wso2-open-operations/wso2-motor-rally/backend/internal/middleware"
 	"github.com/wso2-open-operations/wso2-motor-rally/backend/internal/realtime"
 	"github.com/wso2-open-operations/wso2-motor-rally/backend/internal/scoring"
 	"github.com/wso2-open-operations/wso2-motor-rally/backend/internal/sessions"
@@ -52,7 +54,7 @@ const leaderboardRefreshTimeout = 5 * time.Second
 // Organizers may watch any event; a crew may watch only its own session. Both
 // checks matter: the session topic carries the cipher reveal, and the event
 // topic carries every other team's position.
-func wsHandler(hub *realtime.Hub, logger *slog.Logger) http.HandlerFunc {
+func wsHandler(cfg config.Config, hub *realtime.Hub, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		identity, ok := authz.IdentityFrom(r.Context())
 		if !ok {
@@ -61,7 +63,7 @@ func wsHandler(hub *realtime.Hub, logger *slog.Logger) http.HandlerFunc {
 		}
 
 		topic := r.URL.Query().Get("topic")
-		if !maySubscribe(identity, topic) {
+		if !maySubscribe(identity, topic, cfg) {
 			logger.Warn("rejected a websocket subscription",
 				"topic", topic,
 				"kind", identity.Kind,
@@ -75,10 +77,22 @@ func wsHandler(hub *realtime.Hub, logger *slog.Logger) http.HandlerFunc {
 	}
 }
 
-func maySubscribe(identity authz.Identity, topic string) bool {
+// maySubscribe decides who may listen to topic.
+//
+// An Asgardeo token resolves to organizer *kind* for anyone who holds one —
+// including a crew member, since the micro app is embedded in the super app.
+// /ws sits under Auth, not RequireOrganizer (it also serves crews), so kind
+// alone would let that crew member watch every event's monitor and every
+// other car's session. The group check below is what RequireOrganizer does
+// for REST; this is its WebSocket equivalent.
+func maySubscribe(identity authz.Identity, topic string, cfg config.Config) bool {
 	switch {
 	case identity.IsOrganizer():
-		// Organizers run the rally; both views are theirs to watch.
+		if !middleware.HasAnyRole(identity.Groups, cfg.OrganizerRole, cfg.AdminRole) {
+			return false
+		}
+
+		// Staff run the rally; both views are theirs to watch.
 		return strings.HasPrefix(topic, eventTopicPrefix) || strings.HasPrefix(topic, sessionTopicPrefix)
 	case identity.IsTeam():
 		return topic == sessions.SessionTopic(identity.SessionID)

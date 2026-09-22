@@ -60,6 +60,7 @@ const vehicles: Vehicle[] = [
       {
         id: "c1",
         name: "Nimal Perera",
+        email: "nimal@wso2.com",
         phoneNumber: "0771234567",
         role: "navigator",
         originCountry: "LK",
@@ -215,7 +216,8 @@ describe("VehiclesPage", () => {
     await user.type(within(dialog).getByLabelText(/Vehicle code/), "PKT-009");
     await user.type(within(dialog).getByLabelText(/Team name/), "Null Pointers");
     await user.click(within(dialog).getByRole("button", { name: /Crew member/ }));
-    await user.type(within(dialog).getByLabelText(/Name/), "Kasun");
+    await user.type(within(dialog).getByLabelText(/^Name/), "Kasun");
+    await user.type(within(dialog).getByLabelText(/WSO2 email/), "kasun@wso2.com");
     await user.type(within(dialog).getByLabelText(/Phone/), "0771234567");
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
 
@@ -223,13 +225,13 @@ describe("VehiclesPage", () => {
     expect(callsTo("POST", "/events/e1/vehicles")[0].body).toMatchObject({
       code: "PKT-009",
       teamName: "Null Pointers",
-      crew: [{ name: "Kasun", phoneNumber: "0771234567" }],
+      crew: [{ name: "Kasun", email: "kasun@wso2.com", phoneNumber: "0771234567" }],
     });
   });
 
   // The backend rejects the whole vehicle over one bad crew row, so catching it
   // here saves a round trip that would discard the organizer's typing.
-  it("refuses to send a crew member with no usable phone number", async () => {
+  it("refuses to send a crew member with no WSO2 email", async () => {
     const user = userEvent.setup();
     renderPage();
 
@@ -240,10 +242,39 @@ describe("VehiclesPage", () => {
     await user.type(within(dialog).getByLabelText(/Vehicle code/), "PKT-009");
     await user.type(within(dialog).getByLabelText(/Team name/), "Null Pointers");
     await user.click(within(dialog).getByRole("button", { name: /Crew member/ }));
-    await user.type(within(dialog).getByLabelText(/Name/), "Kasun");
+    await user.type(within(dialog).getByLabelText(/^Name/), "Kasun");
+    await user.type(within(dialog).getByLabelText(/Phone/), "0771234567");
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
 
-    expect(await within(dialog).findByText(/needs a name and a phone number/i)).toBeInTheDocument();
+    expect(
+      await within(dialog).findByText(/needs a name, a WSO2 email address/i),
+    ).toBeInTheDocument();
+    expect(callsTo("POST", "/events/e1/vehicles")).toHaveLength(0);
+  });
+
+  // A join matches the super app's identity to a roster row, so two people in
+  // one car sharing an address would make that ambiguous.
+  it("refuses two crew members with the same address", async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    await screen.findByText("Data Dashers");
+    await user.click(screen.getByRole("button", { name: /Vehicle/ }));
+
+    const dialog = await screen.findByRole("dialog");
+    await user.type(within(dialog).getByLabelText(/Vehicle code/), "PKT-009");
+    await user.type(within(dialog).getByLabelText(/Team name/), "Null Pointers");
+    for (const name of ["Kasun", "Nimal"]) {
+      await user.click(within(dialog).getByRole("button", { name: /Crew member/ }));
+      const rows = within(dialog).getAllByRole("group", { name: /Crew member/ });
+      const row = rows[rows.length - 1];
+      await user.type(within(row).getByLabelText(/^Name/), name);
+      await user.type(within(row).getByLabelText(/WSO2 email/), "shared@wso2.com");
+      await user.type(within(row).getByLabelText(/Phone/), "0771234567");
+    }
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+
+    expect(await within(dialog).findByText(/share the address/i)).toBeInTheDocument();
     expect(callsTo("POST", "/events/e1/vehicles")).toHaveLength(0);
   });
 
