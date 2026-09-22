@@ -1,0 +1,27 @@
+<!doctype html>
+<!--
+ Copyright (c) 2026 WSO2 LLC. (https://www.wso2.com).
+ Licensed under the Apache License, Version 2.0.
+-->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- maximum-scale=1 and user-scalable=no: this is a driving aid in a cradle.
+         A pinch-zoom while the car is moving loses the crew their place. -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#ff7300" />
+    <title>WSO2 Motor Rally</title>
+    <!-- RELATIVE, and before the module. The super app extracts this app to an
+         arbitrary directory and loads it over file://, where "/config.js" points
+         at the filesystem root. src/config/endpoints.ts throws if this has not
+         run, so a wrong path fails at startup rather than mid-rally. -->
+    <script src="./config.js"></script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
