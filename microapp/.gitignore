@@ -1,0 +1,10 @@
+node_modules/
+dist/
+*.local
+*.tsbuildinfo
+
+# Per-environment runtime config. Commit config.js.example instead.
+public/config.js
+
+# The build artefact uploaded to the super app store.
+rally-microapp.zip

@@ -1,0 +1,39 @@
+/**
+ * config.js — Runtime configuration for the WSO2 Motor Rally in-car app
+ * ─────────────────────────────────────────────────────────────────────────────
+ * Copy to  public/config.js  (gitignored) and fill in for your environment.
+ *
+ * Loaded by index.html from a RELATIVE "./config.js" before the bundle, because
+ * the super app serves this app from a file:// path where "/config.js" would
+ * resolve to the filesystem root.
+ *
+ * The app THROWS on startup if BACKEND_BASE_URL is missing, rather than starting
+ * and failing every call later.
+ * ─────────────────────────────────────────────────────────────────────────────
+ */
+window.config = {
+  // ── Backend ───────────────────────────────────────────────────────────────
+  //
+  // BACKEND_BASE_URL  (required)
+  //   Rally backend REST root, no trailing slash. The WebSocket URL is derived
+  //   from it (http→ws, https→wss, + "/ws"), so there is nothing else to set.
+  BACKEND_BASE_URL: "http://localhost:8080",
+
+  // ── How this app is running ───────────────────────────────────────────────
+  //
+  // IS_MICROAPP  (required in the super app; omit or false for browser dev)
+  //   true  → take the Asgardeo token from the super app's native bridge.
+  //   false → sign in through Asgardeo in the browser, so the app is
+  //           developable on a laptop.
+  //   Must be the boolean true, not the string "true".
+  IS_MICROAPP: false,
+
+  // ── Asgardeo (only used when IS_MICROAPP is false) ─────────────────────────
+  //
+  // Embedded, the super app owns the OIDC flow and hands over a token minted
+  // for the clientId in microapp.json — these four are then ignored.
+  ASGARDEO_BASE_URL: "https://api.asgardeo.io/t/<your-tenant>",
+  CLIENT_ID: "<your-client-id>",
+  SIGN_IN_REDIRECT_URL: "http://localhost:3001",
+  SIGN_OUT_REDIRECT_URL: "http://localhost:3001",
+};
