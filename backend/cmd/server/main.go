@@ -29,6 +29,10 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+	// Embeds the tz database, so EVENT_TIME_ZONE resolves on a minimal
+	// container image that ships no /usr/share/zoneinfo. Without it, the zone
+	// that decides when every car is released would fail to load in Choreo.
+	_ "time/tzdata"
 
 	"github.com/wso2-open-operations/wso2-motor-rally/backend/internal/authz"
 	"github.com/wso2-open-operations/wso2-motor-rally/backend/internal/config"
@@ -89,10 +93,11 @@ func run() error {
 	srv := &http.Server{
 		Addr: ":" + cfg.Port,
 		Handler: newRouter(deps{
-			cfg:       cfg,
-			db:        db,
-			logger:    logger,
-			organizer: organizer,
+			cfg:        cfg,
+			db:         db,
+			logger:     logger,
+			organizer:  organizer,
+			background: ctx,
 		}),
 		ReadHeaderTimeout: readHeaderTimeout,
 	}

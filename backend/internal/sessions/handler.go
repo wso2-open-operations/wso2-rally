@@ -120,10 +120,16 @@ func (h *Handler) ping(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	takenAt, err := req.TakenAt()
+	if err != nil {
+		httpx.WriteDomainError(w, r, h.logger, err)
+		return
+	}
+
 	// Accuracy is accepted so the client need not special-case it, but nothing
 	// is decided from it yet: a geofence call is made from the reported point.
-	result, err := h.service.Ping(r.Context(), caller.sessionID, caller.deviceID,
-		LatLng{Lat: req.Lat, Lng: req.Lng})
+	result, err := h.service.PingAt(r.Context(), caller.sessionID, caller.deviceID,
+		LatLng{Lat: req.Lat, Lng: req.Lng}, takenAt)
 	if err != nil {
 		httpx.WriteDomainError(w, r, h.logger, err)
 		return

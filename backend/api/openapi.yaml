@@ -950,6 +950,22 @@ paths:
                 lat: { type: number, format: double }
                 lng: { type: number, format: double }
                 accuracy: { type: number, format: double }
+                ts:
+                  type: string
+                  format: date-time
+                  description: |
+                    When the fix was taken. Omit it on a live fix — absent
+                    means "now", judged by the server's clock. Set it on a
+                    buffered flush, so fixes taken over minutes and sent in
+                    one burst are judged by when the car was there rather than
+                    as a string of teleports.
+
+                    Refused (400) when more than 30 seconds ahead of the
+                    server or more than 3 hours old. A few seconds fast is
+                    clamped to now. A fix older than the session's last known
+                    position — another phone kept the car covered — is
+                    accepted and ignored, and answers with nothing unlocked.
+                  example: "2027-02-13T09:28:00.250Z"
       responses:
         "200":
           description: What is now available.
@@ -1414,7 +1430,25 @@ components:
         totalScore: { type: integer }
         lastLat: { type: number, nullable: true }
         lastLng: { type: number, nullable: true }
-        lastSeenAt: { type: string, format: date-time, nullable: true }
+        lastSeenAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: When the car's last accepted fix was taken.
+        lastReportAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: |
+            When any phone in the car last reported, stamped on arrival. A
+            replayed buffer carries old fix times, so this — not lastSeenAt —
+            says whether the car is covered right now.
+        coverageLost:
+          type: boolean
+          description: |
+            A car on the course whose phones have all been silent for over 30
+            seconds. Live changes arrive as coverage_lost / coverage_restored
+            on the event topic.
 
     DebriefVideo:
       type: object
@@ -1458,10 +1492,24 @@ components:
         vehicleCode: { type: string }
         teamName: { type: string }
         eventStatus: { $ref: "#/components/schemas/EventStatus" }
-        startTime: { type: string }
+        startTime:
+          type: string
+          description: The wall-clock start as the organizer typed it, "HH:MM".
+        startsAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: |
+            The synchronised start as an instant, read in the rally's zone
+            (EVENT_TIME_ZONE). Count down to this rather than to startTime,
+            which carries no date or zone. Null when the event's start cannot
+            be read.
         cipher:
           type: string
-          description: Empty until the event is active.
+          description: |
+            Empty until the event is active *and* startsAt has passed.
+            Publishing opens an event to crews, which can be days before the
+            rally, so "active" alone does not reveal it.
         startCircle: { $ref: "#/components/schemas/Circle" }
         finishCircle: { $ref: "#/components/schemas/Circle" }
         waypoints:
@@ -1476,6 +1524,36 @@ components:
                 type: array
                 items: { type: string }
         nextWaypointId: { type: string }
+        crew:
+          type: array
+          description: Every phone in the car, including this one, in join order.
+          items: { $ref: "#/components/schemas/Device" }
+        you: { $ref: "#/components/schemas/Device" }
+        sharingCount:
+          type: integer
+          description: |
+            How many phones reported in the last 90 seconds. Drives the
+            "who is sharing" indicator; generous so it does not flicker.
+        coverageLost:
+          type: boolean
+          description: |
+            True while the car is on the course and no phone has reported for
+            30 seconds — the rule behind the coverage_lost frame. Stricter than
+            sharingCount reaching zero; this is the value to drive the warning
+            that asks a passenger to keep the rally app open.
+
+    Device:
+      type: object
+      description: One phone in the car.
+      properties:
+        id: { type: string }
+        crewMemberId: { type: string }
+        crewMemberName: { type: string }
+        joinedAt: { type: string, format: date-time }
+        lastSeenAt: { type: string, format: date-time, nullable: true }
+        sharing:
+          type: boolean
+          description: Reported in the last 90 seconds. Computed server-side so every phone agrees.
 
     PingResponse:
       type: object

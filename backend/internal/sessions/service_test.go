@@ -65,6 +65,31 @@ type fakeRepo struct {
 	devices map[string]map[string]Device
 	// visits is keyed sessionID -> waypointID, mirroring session_waypoint_visit.
 	visits map[string]map[string]bool
+	// activeEvents and liveSessionIDs feed the start-signal scheduler.
+	activeEvents    []StartingEvent
+	liveSessionIDs  map[string][]string
+	liveSessionsErr error
+	// coverage feeds CheckCoverage.
+	coverage    []SessionCoverage
+	coverageErr error
+}
+
+func (f *fakeRepo) ActiveSessionCoverage(context.Context) ([]SessionCoverage, error) {
+	if f.coverageErr != nil {
+		return nil, f.coverageErr
+	}
+	return f.coverage, nil
+}
+
+func (f *fakeRepo) ActiveEvents(context.Context) ([]StartingEvent, error) {
+	return f.activeEvents, nil
+}
+
+func (f *fakeRepo) LiveSessionIDsOf(_ context.Context, eventID string) ([]string, error) {
+	if f.liveSessionsErr != nil {
+		return nil, f.liveSessionsErr
+	}
+	return f.liveSessionIDs[eventID], nil
 }
 
 func newFakeRepo() *fakeRepo {
@@ -82,6 +107,7 @@ func newFakeRepo() *fakeRepo {
 		event: EventInfo{
 			Status:    "active",
 			Cipher:    "API Integration",
+			Date:      "2027-02-13",
 			StartTime: "09:00",
 			Start:     GeoCircle{Lat: 6.8901, Lng: 79.9200, RadiusM: 40, Placed: true},
 			Finish:    GeoCircle{Lat: 6.8480, Lng: 79.9280, RadiusM: 30, Placed: true},
@@ -345,7 +371,7 @@ func newService(t *testing.T) (*Service, *fakeRepo, *recordingAlerts, *[]broadca
 	var sent []broadcastRecord
 	svc := NewService(repo, stubMinter{}, alertRaiser, func(topic string, message any) {
 		sent = append(sent, broadcastRecord{topic: topic, message: message})
-	})
+	}, colombo)
 
 	return svc, repo, alertRaiser, &sent
 }
@@ -489,6 +515,7 @@ func TestService_Join_RequiresVehicleAndCaller(t *testing.T) {
 func TestService_State_RevealsCipherOnlyWhenActive(t *testing.T) {
 	svc, repo, _, _ := newService(t)
 	session := bindOnce(t, svc)
+	frozenClock(svc, nineAM.Add(time.Hour))
 
 	active, err := svc.State(context.Background(), session.ID, "")
 	require.NoError(t, err)
@@ -810,4 +837,125 @@ func TestIsPlausibleMove_BackwardsClockStillRejectsAJump(t *testing.T) {
 // or no rally could ever start.
 func TestIsPlausibleMove_FirstFixIsAlwaysAccepted(t *testing.T) {
 	require.True(t, isPlausibleMove(Session{}, LatLng{Lat: 6.9, Lng: 79.92}, time.Now()))
+}
+
+// fourKmNorthOfKandy is inside no geofence, and far enough from wp-1 that
+// reaching it "instantly" is a teleport but reaching it in two minutes is not
+// (4 km / 120 s ≈ 33 m/s, under the 60 m/s ceiling).
+var fourKmNorthOfKandy = LatLng{Lat: 6.9261, Lng: 79.9200}
+
+// frozenClock pins the service's notion of "now" so fix timestamps can be
+// placed precisely around it.
+func frozenClock(svc *Service, at time.Time) {
+	svc.now = func() time.Time { return at }
+}
+
+// A buffered flush replays fixes taken minutes ago in one burst. Judged by
+// arrival time they cross kilometres in milliseconds and the whole replay is
+// thrown away; judged by when each was taken, they are an ordinary drive.
+func TestService_PingAt_BufferedFixesAreJudgedByWhenTheyWereTaken(t *testing.T) {
+	svc, _, _, _ := newService(t)
+	session := bindOnce(t, svc)
+	ctx := context.Background()
+	now := time.Date(2027, 2, 13, 9, 30, 0, 0, time.UTC)
+	frozenClock(svc, now)
+
+	_, err := svc.PingAt(ctx, session.ID, "device-"+crewA, fourKmNorthOfKandy, now.Add(-2*time.Minute))
+	require.NoError(t, err)
+	result, err := svc.PingAt(ctx, session.ID, "device-"+crewA, atKandy, now)
+
+	require.NoError(t, err)
+	require.Equal(t, []string{"task-1"}, result.UnlockedTaskIDs,
+		"4 km in two minutes is a drive, so the waypoint unlocks")
+}
+
+// The live path must be byte-for-byte unchanged: with no timestamp, the same
+// pair arriving back to back is still a teleport.
+func TestService_Ping_WithoutATimestampTheSamePairIsStillATeleport(t *testing.T) {
+	svc, _, _, _ := newService(t)
+	session := bindOnce(t, svc)
+	ctx := context.Background()
+
+	_, err := svc.Ping(ctx, session.ID, "device-"+crewA, fourKmNorthOfKandy)
+	require.NoError(t, err)
+	result, err := svc.Ping(ctx, session.ID, "device-"+crewA, atKandy)
+
+	require.NoError(t, err)
+	require.Empty(t, result.UnlockedTaskIDs, "4 km in no time is still rejected")
+}
+
+// The fix's own time is what the session remembers, so the next buffered fix is
+// measured from it — and a run that starts or finishes on a replayed fix is
+// stamped when the car was actually there.
+func TestService_PingAt_RecordsTheMomentTheFixWasTaken(t *testing.T) {
+	svc, repo, _, _ := newService(t)
+	session := bindOnce(t, svc)
+	now := time.Date(2027, 2, 13, 9, 30, 0, 0, time.UTC)
+	frozenClock(svc, now)
+	taken := now.Add(-90 * time.Second)
+
+	_, err := svc.PingAt(context.Background(), session.ID, "device-"+crewA, atKandy, taken)
+
+	require.NoError(t, err)
+	stored := repo.sessions[session.ID]
+	require.NotNil(t, stored.LastPingAt)
+	require.True(t, taken.Equal(*stored.LastPingAt))
+	require.NotNil(t, stored.StartedAt)
+	require.True(t, taken.Equal(*stored.StartedAt), "the run began when the car left, not when the phone caught up")
+}
+
+// Another phone kept the car covered while this one was in the background, so
+// its replay is older than what the session already knows. It must not move
+// the clock backwards, or the next live fix would be measured from the past.
+func TestService_PingAt_AFixOlderThanTheLastOneIsIgnored(t *testing.T) {
+	svc, repo, _, _ := newService(t)
+	session := bindOnce(t, svc)
+	ctx := context.Background()
+	now := time.Date(2027, 2, 13, 9, 30, 0, 0, time.UTC)
+	frozenClock(svc, now)
+
+	_, err := svc.PingAt(ctx, session.ID, "device-"+crewB, atKandy, now)
+	require.NoError(t, err)
+	result, err := svc.PingAt(ctx, session.ID, "device-"+crewA, fourKmNorthOfKandy, now.Add(-time.Minute))
+
+	require.NoError(t, err)
+	require.Empty(t, result.UnlockedTaskIDs)
+	stored := repo.sessions[session.ID]
+	require.True(t, now.Equal(*stored.LastPingAt), "last_ping_at never moves backwards")
+	require.InDelta(t, atKandy.Lat, *stored.LastLat, 1e-9, "nor does the stale fix overwrite the position")
+}
+
+func TestService_PingAt_RejectsATimestampItCannotTrust(t *testing.T) {
+	now := time.Date(2027, 2, 13, 9, 30, 0, 0, time.UTC)
+
+	tests := map[string]time.Time{
+		"from the future":             now.Add(maxFixClockSkew + time.Second),
+		"older than any buffer holds": now.Add(-maxFixAge - time.Second),
+	}
+	for name, takenAt := range tests {
+		t.Run(name, func(t *testing.T) {
+			svc, _, _, _ := newService(t)
+			session := bindOnce(t, svc)
+			frozenClock(svc, now)
+
+			_, err := svc.PingAt(context.Background(), session.ID, "device-"+crewA, atKandy, takenAt)
+
+			require.ErrorIs(t, err, apperr.ErrValidation)
+		})
+	}
+}
+
+// A phone clock a few seconds fast is ordinary. Storing its future instant
+// would make the next live fix look older than the last one and drop it, so
+// the fix is clamped to the server's now instead.
+func TestService_PingAt_ClampsASlightlyFastPhoneClock(t *testing.T) {
+	svc, repo, _, _ := newService(t)
+	session := bindOnce(t, svc)
+	now := time.Date(2027, 2, 13, 9, 30, 0, 0, time.UTC)
+	frozenClock(svc, now)
+
+	_, err := svc.PingAt(context.Background(), session.ID, "device-"+crewA, atKandy, now.Add(5*time.Second))
+
+	require.NoError(t, err)
+	require.True(t, now.Equal(*repo.sessions[session.ID].LastPingAt))
 }

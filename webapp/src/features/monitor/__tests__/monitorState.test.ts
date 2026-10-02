@@ -37,6 +37,8 @@ const snapshot: MonitorSnapshot = {
       lastLat: 6.89,
       lastLng: 79.92,
       lastSeenAt: "2027-02-13T09:30:00Z",
+      lastReportAt: "2027-02-13T09:30:00Z",
+      coverageLost: false,
     },
     {
       vehicleCode: "PKT-002",
@@ -49,6 +51,8 @@ const snapshot: MonitorSnapshot = {
       lastLat: null,
       lastLng: null,
       lastSeenAt: null,
+      lastReportAt: null,
+      coverageLost: true,
     },
   ],
 };
@@ -203,6 +207,63 @@ describe("monitorReducer", () => {
     });
 
     expect(after).toBe(before);
+  });
+});
+
+describe("location coverage", () => {
+  it("keeps a car's dark flag from the snapshot, so a late-opened monitor still sees it", () => {
+    const state = fromSnapshot(snapshot);
+
+    expect(state.vehicles["PKT-001"].coverageLost).toBe(false);
+    expect(state.vehicles["PKT-002"].coverageLost).toBe(true);
+  });
+
+  it("flags a car on coverage_lost", () => {
+    const state = monitorReducer(fromSnapshot(snapshot), {
+      type: "coverage_lost",
+      vehicleCode: "PKT-001",
+      lastReportAt: "2027-02-13T09:40:00Z",
+    });
+
+    expect(state.vehicles["PKT-001"].coverageLost).toBe(true);
+    expect(state.vehicles["PKT-001"].lastReportAt).toBe("2027-02-13T09:40:00Z");
+  });
+
+  it("clears the flag on coverage_restored", () => {
+    const state = monitorReducer(fromSnapshot(snapshot), {
+      type: "coverage_restored",
+      vehicleCode: "PKT-002",
+    });
+
+    expect(state.vehicles["PKT-002"].coverageLost).toBe(false);
+  });
+
+  it("clears the flag as soon as the car moves, without waiting for coverage_restored", () => {
+    // A position frame is proof some phone is reporting; the restored frame
+    // can trail it by up to a second.
+    const state = monitorReducer(fromSnapshot(snapshot), {
+      type: "vehicle_position",
+      vehicleCode: "PKT-002",
+      lat: 6.9,
+      lng: 79.9,
+    });
+
+    expect(state.vehicles["PKT-002"].coverageLost).toBe(false);
+  });
+
+  it("parses the coverage frames and rejects ones missing the vehicle", () => {
+    expect(
+      parseMonitorMessage(
+        JSON.stringify({ type: "coverage_lost", vehicleCode: "PKT-001", lastReportAt: null }),
+      ),
+    ).toEqual({ type: "coverage_lost", vehicleCode: "PKT-001", lastReportAt: null });
+    expect(
+      parseMonitorMessage(JSON.stringify({ type: "coverage_restored", vehicleCode: "PKT-001" })),
+    ).toEqual({ type: "coverage_restored", vehicleCode: "PKT-001" });
+    expect(parseMonitorMessage(JSON.stringify({ type: "coverage_lost", lastReportAt: null }))).toBeNull();
+    expect(
+      parseMonitorMessage(JSON.stringify({ type: "coverage_lost", vehicleCode: "PKT-001", lastReportAt: 5 })),
+    ).toBeNull();
   });
 });
 

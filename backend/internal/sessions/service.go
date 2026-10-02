@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/wso2-open-operations/wso2-motor-rally/backend/internal/alerts"
@@ -84,6 +85,15 @@ type Repo interface {
 	// SaveSubmission stores an attempt and returns the session's recomputed
 	// total, so a resubmission corrects the score instead of adding to it.
 	SaveSubmission(ctx context.Context, sub Submission) (int, error)
+	// ActiveEvents lists the events crews may currently run, for the start
+	// signal scheduler.
+	ActiveEvents(ctx context.Context) ([]StartingEvent, error)
+	// LiveSessionIDsOf lists the event's bound and active runs — the phones a
+	// start signal has to reach.
+	LiveSessionIDsOf(ctx context.Context, eventID string) ([]string, error)
+	// ActiveSessionCoverage lists every run on the course with the last time
+	// any of its phones reported.
+	ActiveSessionCoverage(ctx context.Context) ([]SessionCoverage, error)
 }
 
 // AlertRaiser is the slice of the alerts service this package needs, so a crew
@@ -129,16 +139,42 @@ type Service struct {
 	minter    TokenMinter
 	alerts    AlertRaiser
 	broadcast Broadcaster
+	// now is the service's clock. It is a field so tests can place fix
+	// timestamps precisely around it; production always uses time.Now.
+	now func() time.Time
+	// zone is the rally's wall clock: an event's "09:00" is read in it.
+	zone *time.Location
+
+	// startedMu guards started, the events whose start signal has gone out.
+	startedMu sync.Mutex
+	started   map[string]struct{}
+
+	// darkMu guards dark, the cars currently announced as having no phone
+	// sharing location, keyed by session.
+	darkMu sync.Mutex
+	dark   map[string]SessionCoverage
 }
 
 // NewService wires a Service. A nil broadcaster becomes a no-op so the service
 // is usable before the realtime hub exists.
-func NewService(repo Repo, minter TokenMinter, alertRaiser AlertRaiser, broadcast Broadcaster) *Service {
+//
+// zone is the rally's wall clock, the zone an organizer means when they type
+// "09:00". It is required: config.Load resolves it and refuses to start on a
+// zone it cannot load, because a wrong zone releases every car hours off.
+func NewService(
+	repo Repo, minter TokenMinter, alertRaiser AlertRaiser, broadcast Broadcaster, zone *time.Location,
+) *Service {
 	if broadcast == nil {
 		broadcast = func(string, any) {}
 	}
 
-	return &Service{repo: repo, minter: minter, alerts: alertRaiser, broadcast: broadcast}
+	return &Service{
+		repo: repo, minter: minter, alerts: alertRaiser, broadcast: broadcast,
+		now:     func() time.Time { return time.Now().UTC() },
+		zone:    zone,
+		started: map[string]struct{}{},
+		dark:    map[string]SessionCoverage{},
+	}
 }
 
 // Join puts one crew member's phone into their vehicle's run and returns the
@@ -313,28 +349,79 @@ func (s *Service) State(ctx context.Context, sessionID, deviceID string) (Sessio
 		Waypoints:    waypoints,
 		Crew:         crew,
 	}
+	var lastReportAt *time.Time
 	for _, device := range crew {
 		if device.ID == deviceID {
 			state.You = device
-			break
+		}
+		if device.LastSeenAt != nil && (lastReportAt == nil || device.LastSeenAt.After(*lastReportAt)) {
+			lastReportAt = device.LastSeenAt
 		}
 	}
-	// The cipher is part of the start signal; withholding it until the event
-	// is active keeps it off the wire during setup.
-	if event.IsActive() {
-		state.Cipher = event.Cipher
+	// Only a car on the course is expected to be reporting; a crew still on the
+	// grid has not started, and that is not an outage.
+	state.CoverageLost = session.Status == StatusActive && CoverageLost(lastReportAt, s.now())
+	// The cipher is part of the 09:00 start. Publishing an event opens it to
+	// crews, which can be days earlier, so "active" alone must not reveal it.
+	// A start that cannot be read cannot be judged, and a guard that cannot
+	// judge denies: the cipher stays withheld rather than going out early.
+	startsAt, err := startInstant(event.Date, event.StartTime, s.zone)
+	if err != nil {
+		s.logger().Error("could not read the event start; withholding the cipher",
+			"event_id", session.EventID, "error", err)
+	} else {
+		state.StartsAt = startsAt
+		if event.IsActive() && !s.now().Before(startsAt) {
+			state.Cipher = event.Cipher
+		}
 	}
 	state.NextWaypointID = nextWaypointID(waypoints, session.CurrentWaypointID)
 
 	return state, nil
 }
 
-// Ping records a reported position and answers with what the crew may now do.
+// maxFixAge is the oldest a client-stamped fix may be and still be judged.
+//
+// It is sized to the super app's buffer, not to a live stream: the route screen
+// deep-links into Google Maps, so a two-hour background gap is designed for,
+// and the host caps its buffer at 2,000 fixes — under three hours at one fix
+// every five seconds. Anything older than that was not produced by the flush
+// this exists for.
+const maxFixAge = 3 * time.Hour
+
+// maxFixClockSkew is how far ahead of the server a phone's clock may run before
+// its timestamp is refused rather than clamped. A few seconds fast is ordinary;
+// a minute fast is a clock that cannot be used to measure speed.
+const maxFixClockSkew = 30 * time.Second
+
+// Ping records a live position — one taken now — and answers with what the
+// crew may now do.
+func (s *Service) Ping(ctx context.Context, sessionID, deviceID string, position LatLng) (PingResult, error) {
+	return s.PingAt(ctx, sessionID, deviceID, position, time.Time{})
+}
+
+// PingAt records a position taken at takenAt, and answers with what the crew may
+// now do. A zero takenAt means the fix was taken now, which is the live path.
 //
 // The client never decides whether it is inside a boundary: it reports where
 // it is, and this method runs the geofence maths server-side.
-func (s *Service) Ping(ctx context.Context, sessionID, deviceID string, position LatLng) (PingResult, error) {
+//
+// The timestamp exists for the super app's buffered flush. A burst of fixes
+// taken over minutes arrives within milliseconds, and judging them by arrival
+// time makes an ordinary drive look like a string of teleports. Trusting a
+// client clock here is consistent with the MVP's existing decision to trust
+// client GPS: a phone that can lie about its time could already lie about its
+// position.
+func (s *Service) PingAt(
+	ctx context.Context, sessionID, deviceID string, position LatLng, takenAt time.Time,
+) (PingResult, error) {
 	if err := validatePosition(position); err != nil {
+		return PingResult{}, err
+	}
+
+	received := s.now()
+	now, err := fixInstant(takenAt, received)
+	if err != nil {
 		return PingResult{}, err
 	}
 
@@ -355,7 +442,18 @@ func (s *Service) Ping(ctx context.Context, sessionID, deviceID string, position
 		return PingResult{}, err
 	}
 
-	now := time.Now().UTC()
+	// Another phone kept the car covered while this one was backgrounded, so its
+	// replay is older than what the session already knows. Judging it would
+	// mean measuring speed backwards in time, and storing it would drag
+	// last_ping_at into the past — the next live fix would then be measured
+	// from a stale point. The phone was still heard from, so it counts as
+	// sharing.
+	if session.LastPingAt != nil && now.Before(*session.LastPingAt) {
+		s.logger().Info("ignored a fix older than the session's last known position",
+			"session_id", session.ID, "taken_at", now, "last_ping_at", *session.LastPingAt)
+		s.touchDevice(ctx, deviceID, sessionID, received)
+		return PingResult{}, nil
+	}
 
 	// Any phone in the car may report, which is what keeps the car covered when
 	// the driver is in Google Maps — but it also means a phone that is not in the
@@ -392,15 +490,7 @@ func (s *Service) Ping(ctx context.Context, sessionID, deviceID string, position
 		return PingResult{}, fmt.Errorf("update session %s: %w", sessionID, err)
 	}
 
-	// Recording that this phone was heard from is what makes it count as sharing
-	// location. Not fatal: the position is already stored, and losing the
-	// timestamp costs a "who is sharing" indicator, not the crew's progress.
-	if deviceID != "" {
-		if err := s.repo.TouchDevice(ctx, deviceID, now); err != nil {
-			s.logger().Warn("could not record that a phone reported",
-				"device_id", deviceID, "session_id", sessionID, "error", err)
-		}
-	}
+	s.touchDevice(ctx, deviceID, sessionID, received)
 
 	s.publishPosition(ctx, session, position)
 	s.broadcastSessionEvents(session.ID, result)
@@ -650,6 +740,82 @@ func (s *Service) claimVisits(ctx context.Context, sessionID string, result *Pin
 
 func (s *Service) logger() *slog.Logger { return slog.Default() }
 
+// startSignalWindow is how long after the start a signal may still go out.
+//
+// It bounds a server restart: one that comes back at 09:02 still releases the
+// grid, one that comes back at noon does not announce a 09:00 start. A phone
+// that misses the frame is not stranded either way — GET /sessions/me carries
+// the start instant and, once it has passed, the cipher.
+const startSignalWindow = 5 * time.Minute
+
+// FireDueStartSignals releases every bound car of every event whose start has
+// just arrived: a start_signal and the cipher, on each live session's topic.
+//
+// It is meant to be called every second. Each event fires once per process;
+// a restart inside startSignalWindow fires it again, so clients must treat
+// both messages as idempotent — which they are, since each only moves a phone
+// to a screen it may already be on.
+//
+// An event whose start cannot be read, or whose sessions cannot be listed, is
+// reported and left unfired so the next tick retries it. Neither stops the
+// other events from starting.
+func (s *Service) FireDueStartSignals(ctx context.Context) error {
+	events, err := s.repo.ActiveEvents(ctx)
+	if err != nil {
+		return fmt.Errorf("list active events: %w", err)
+	}
+
+	now := s.now()
+	var errs []error
+	for _, event := range events {
+		startsAt, err := startInstant(event.Date, event.StartTime, s.zone)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("event %s: %w", event.ID, err))
+			continue
+		}
+		if now.Before(startsAt) || now.Sub(startsAt) > startSignalWindow || s.hasStarted(event.ID) {
+			continue
+		}
+
+		sessionIDs, err := s.repo.LiveSessionIDsOf(ctx, event.ID)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("list live sessions of event %s: %w", event.ID, err))
+			continue
+		}
+
+		for _, sessionID := range sessionIDs {
+			topic := SessionTopic(sessionID)
+			s.broadcast(topic, map[string]any{
+				"type":     "start_signal",
+				"startsAt": startsAt.Format(time.RFC3339),
+			})
+			// An empty reveal would blank the phone's cipher screen, so an
+			// event with none configured starts without one.
+			if event.Cipher != "" {
+				s.broadcast(topic, map[string]any{"type": "cipher_reveal", "cipher": event.Cipher})
+			}
+		}
+
+		s.markStarted(event.ID)
+		s.logger().Info("start signal sent", "event_id", event.ID, "sessions", len(sessionIDs))
+	}
+
+	return errors.Join(errs...)
+}
+
+func (s *Service) hasStarted(eventID string) bool {
+	s.startedMu.Lock()
+	defer s.startedMu.Unlock()
+	_, ok := s.started[eventID]
+	return ok
+}
+
+func (s *Service) markStarted(eventID string) {
+	s.startedMu.Lock()
+	defer s.startedMu.Unlock()
+	s.started[eventID] = struct{}{}
+}
+
 // publishPosition pushes the vehicle's position to the organizer's monitor.
 // A failure here costs a map marker, not the crew's ping, so it is not fatal.
 func (s *Service) publishPosition(ctx context.Context, session Session, position LatLng) {
@@ -711,6 +877,46 @@ func nextWaypointID(waypoints []WaypointGeo, currentID *string) string {
 	}
 
 	return ""
+}
+
+// fixInstant decides which moment a fix is judged at: when it was taken if the
+// client said so and the claim is usable, otherwise when it was received.
+//
+// A guard that cannot judge must deny: a timestamp too far in the future or
+// older than any buffer holds is refused, not quietly replaced with "now",
+// because replacing it would re-create the teleport the timestamp was sent to
+// prevent. A clock only slightly fast is clamped instead — storing its future
+// instant would make the next live fix look older than the last one.
+func fixInstant(takenAt, received time.Time) (time.Time, error) {
+	if takenAt.IsZero() {
+		return received, nil
+	}
+
+	takenAt = takenAt.UTC()
+	switch {
+	case takenAt.After(received.Add(maxFixClockSkew)):
+		return time.Time{}, apperr.Validationf("ts is in the future; check the phone's clock")
+	case takenAt.After(received):
+		return received, nil
+	case received.Sub(takenAt) > maxFixAge:
+		return time.Time{}, apperr.Validationf("ts is older than %s and can no longer be judged", maxFixAge)
+	}
+
+	return takenAt, nil
+}
+
+// touchDevice records that a phone was heard from, which is what makes it count
+// as sharing location. Not fatal: losing the timestamp costs a "who is sharing"
+// indicator, not the crew's progress. It is stamped with the moment of receipt,
+// not the fix's own time — a phone flushing its buffer is back online now.
+func (s *Service) touchDevice(ctx context.Context, deviceID, sessionID string, at time.Time) {
+	if deviceID == "" {
+		return
+	}
+	if err := s.repo.TouchDevice(ctx, deviceID, at); err != nil {
+		s.logger().Warn("could not record that a phone reported",
+			"device_id", deviceID, "session_id", sessionID, "error", err)
+	}
 }
 
 func validatePosition(p LatLng) error {

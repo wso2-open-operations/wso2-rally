@@ -185,3 +185,34 @@ func TestService_MonitorSnapshot_RequiresEventID(t *testing.T) {
 
 	require.ErrorIs(t, err, apperr.ErrValidation)
 }
+
+// A monitor opened mid-rally must show a dark car straight away, not wait for
+// the next coverage_lost frame — which, for a car already dark, never comes.
+func TestService_MonitorSnapshot_FlagsCarsWithNoPhoneSharing(t *testing.T) {
+	now := time.Date(2027, 2, 13, 10, 0, 0, 0, time.UTC)
+	reported := func(ago time.Duration) *time.Time {
+		at := now.Add(-ago)
+		return &at
+	}
+	svc := NewService(&fakeRepo{progress: []VehicleProgress{
+		{VehicleCode: "LIVE", SessionStatus: "active", LastReportAt: reported(5 * time.Second)},
+		{VehicleCode: "DARK", SessionStatus: "active", LastReportAt: reported(45 * time.Second)},
+		{VehicleCode: "NEVER", SessionStatus: "active"},
+		// Only a car on the course can go dark. One still on the grid, or one
+		// that has finished, is not expected to be reporting.
+		{VehicleCode: "GRID", SessionStatus: "bound", LastReportAt: reported(time.Hour)},
+		{VehicleCode: "DONE", SessionStatus: "finished", LastReportAt: reported(time.Hour)},
+	}})
+	svc.now = func() time.Time { return now }
+
+	got, err := svc.MonitorSnapshot(context.Background(), eventID)
+
+	require.NoError(t, err)
+	flagged := map[string]bool{}
+	for _, vehicle := range got.Vehicles {
+		flagged[vehicle.VehicleCode] = vehicle.CoverageLost
+	}
+	require.Equal(t, map[string]bool{
+		"LIVE": false, "DARK": true, "NEVER": true, "GRID": false, "DONE": false,
+	}, flagged)
+}

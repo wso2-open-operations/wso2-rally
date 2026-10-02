@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/wso2-open-operations/wso2-motor-rally/backend/internal/apperr"
+	"github.com/wso2-open-operations/wso2-motor-rally/backend/internal/sessions"
 )
 
 // Standing is one team's raw position before ranking.
@@ -59,7 +60,15 @@ type VehicleProgress struct {
 	TotalScore int
 	LastLat    *float64
 	LastLng    *float64
+	// LastSeenAt is when the car's last accepted fix was taken.
 	LastSeenAt *time.Time
+	// LastReportAt is when any phone in the car last reported, stamped on
+	// arrival. It differs from LastSeenAt: a replayed buffer carries old fix
+	// times, but the phone sending it is reporting now.
+	LastReportAt *time.Time
+	// CoverageLost is true for a car on the course with no phone sharing
+	// location — the driver is in Google Maps and nobody else is reporting.
+	CoverageLost bool
 }
 
 // MonitorSnapshot is the whole live-monitor view for one event.
@@ -82,11 +91,13 @@ type Repo interface {
 // Service exposes the two read views.
 type Service struct {
 	repo Repo
+	// now is the clock coverage is judged by; a field so tests can pin it.
+	now func() time.Time
 }
 
 // NewService wires a Service to its repository.
 func NewService(repo Repo) *Service {
-	return &Service{repo: repo}
+	return &Service{repo: repo, now: func() time.Time { return time.Now().UTC() }}
 }
 
 // Leaderboard ranks an event's teams.
@@ -117,6 +128,16 @@ func (s *Service) MonitorSnapshot(ctx context.Context, eventID string) (MonitorS
 	openAlerts, err := s.repo.OpenAlertCountOf(ctx, eventID)
 	if err != nil {
 		return MonitorSnapshot{}, fmt.Errorf("count open alerts of event %s: %w", eventID, err)
+	}
+
+	// The same rule the live coverage_lost frames use, so a monitor opened on a
+	// car that is already dark flags it immediately rather than never — that
+	// car's frame went out before the page loaded. Only a car on the course is
+	// expected to be reporting.
+	now := s.now()
+	for i := range vehicles {
+		vehicles[i].CoverageLost = vehicles[i].SessionStatus == string(sessions.StatusActive) &&
+			sessions.CoverageLost(vehicles[i].LastReportAt, now)
 	}
 
 	return MonitorSnapshot{Vehicles: vehicles, OpenAlerts: openAlerts}, nil

@@ -46,8 +46,11 @@ export default function CompletionMatrix({
   // the count then the code so the order is stable.
   const ratio = (vehicle: VehicleLive): number =>
     vehicle.totalTasks > 0 ? vehicle.done / vehicle.totalTasks : 0;
+  // A car with no phone sharing location goes first: it is the one an organizer
+  // may need to act on, and at the bottom of a long list it would be missed.
   const ranked = [...vehicles].sort(
     (left, right) =>
+      Number(right.coverageLost) - Number(left.coverageLost) ||
       ratio(right) - ratio(left) ||
       right.done - left.done ||
       left.vehicleCode.localeCompare(right.vehicleCode),
@@ -76,6 +79,19 @@ export default function CompletionMatrix({
               >
                 {vehicle.vehicleCode}
               </Typography>
+              {vehicle.coverageLost && (
+                <Chip
+                  color="error"
+                  label="No location"
+                  size="small"
+                  title={
+                    vehicle.lastReportAt
+                      ? `No phone has reported since ${new Date(vehicle.lastReportAt).toLocaleTimeString()}`
+                      : "No phone in this car has reported"
+                  }
+                  variant="outlined"
+                />
+              )}
               {vehicle.sessionStatus === "finished" && (
                 <Chip color="primary" label="Finished" size="small" variant="outlined" />
               )}

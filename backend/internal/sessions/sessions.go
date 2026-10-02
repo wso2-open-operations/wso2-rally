@@ -178,7 +178,10 @@ type JoinResult struct {
 type EventInfo struct {
 	Status string
 	// Cipher is withheld until the event is active and the start signal fires.
-	Cipher    string
+	Cipher string
+	// Date is the rally day, "2006-01-02". With StartTime it fixes the start
+	// instant in the rally's wall-clock zone.
+	Date      string
 	StartTime string
 	Finish    GeoCircle
 	Start     GeoCircle
@@ -186,6 +189,30 @@ type EventInfo struct {
 
 // IsActive reports whether crews may bind and run.
 func (e EventInfo) IsActive() bool { return e.Status == "active" }
+
+// StartingEvent is an active event as the start-signal scheduler sees it.
+type StartingEvent struct {
+	ID string
+	// Date and StartTime are the event's wall-clock start, read in the rally
+	// zone. See startInstant.
+	Date      string
+	StartTime string
+	Cipher    string
+}
+
+// startInstant turns an event's wall-clock start into an instant.
+//
+// The organizer types "09:00" meaning 09:00 where the rally is run, so it is
+// read in the rally's zone, not the server's — a Choreo pod runs in UTC, and
+// reading it there would release every car five and a half hours late.
+func startInstant(date, startTime string, zone *time.Location) (time.Time, error) {
+	instant, err := time.ParseInLocation("2006-01-02 15:04", date+" "+startTime, zone)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("read start %q %q: %w", date, startTime, err)
+	}
+
+	return instant.UTC(), nil
+}
 
 // TaskState is one task as the crew sees it: the definition's identity plus
 // whether the car has already completed it.
@@ -210,7 +237,11 @@ type SessionState struct {
 	TeamName    string
 	EventStatus string
 	StartTime   string
-	// Cipher is empty until the event is active.
+	// StartsAt is the synchronised start as an instant, so a phone can count
+	// down to it without knowing the rally's time zone. Zero when the event's
+	// start cannot be read.
+	StartsAt time.Time
+	// Cipher is empty until the event is active and its start has passed.
 	Cipher       string
 	StartCircle  GeoCircle
 	FinishCircle GeoCircle
@@ -224,6 +255,10 @@ type SessionState struct {
 	// You is the calling phone's own row, so it can tell itself apart from the
 	// rest of Crew without matching on ids client-side.
 	You Device
+	// CoverageLost is true while the car is on the course and no phone has
+	// reported for CoverageAlarmAfter — the same rule behind coverage_lost, so a
+	// phone that opens mid-outage shows the warning the frames would have.
+	CoverageLost bool
 }
 
 // Voucher is what a crew collects at the finish.

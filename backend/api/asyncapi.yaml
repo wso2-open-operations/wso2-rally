@@ -70,6 +70,8 @@ channels:
           - $ref: "#/components/messages/ScoreDelta"
           - $ref: "#/components/messages/Leaderboard"
           - $ref: "#/components/messages/Alert"
+          - $ref: "#/components/messages/CarCoverageLost"
+          - $ref: "#/components/messages/CarCoverageRestored"
 
   "session:{sessionId}":
     description: |
@@ -89,9 +91,79 @@ channels:
           - $ref: "#/components/messages/CipherReveal"
           - $ref: "#/components/messages/RestLock"
           - $ref: "#/components/messages/Arrival"
+          - $ref: "#/components/messages/CoverageLost"
+          - $ref: "#/components/messages/CoverageRestored"
 
 components:
   messages:
+    CarCoverageLost:
+      name: coverage_lost
+      summary: |
+        A car on the course has had no phone reporting its position for 30
+        seconds. The driver is usually in Google Maps and no passenger is
+        sharing, so geofences are not being evaluated — the monitor should
+        flag the car. Sent once per outage; `GET /events/{eventId}/monitor`
+        carries the same state as `coverageLost` for a monitor opened later.
+      payload:
+        type: object
+        required: [type, vehicleCode, lastReportAt]
+        properties:
+          type:
+            type: string
+            const: coverage_lost
+          vehicleCode:
+            type: string
+          lastReportAt:
+            type: string
+            format: date-time
+            nullable: true
+            description: The last report from any phone in the car; null if none ever did.
+
+    CarCoverageRestored:
+      name: coverage_restored
+      summary: |
+        A car previously announced as dark is reporting again, or has left the
+        course (finished). Clear its flag.
+      payload:
+        type: object
+        required: [type, vehicleCode]
+        properties:
+          type:
+            type: string
+            const: coverage_restored
+          vehicleCode:
+            type: string
+
+    CoverageLost:
+      name: coverage_lost
+      summary: |
+        No phone in this car has reported its position for 30 seconds. Every
+        open phone should ask a passenger to keep the rally app open with
+        location on — a phone locked in a pocket stops reporting. Sent once
+        per outage.
+      payload:
+        type: object
+        required: [type, lastReportAt]
+        properties:
+          type:
+            type: string
+            const: coverage_lost
+          lastReportAt:
+            type: string
+            format: date-time
+            nullable: true
+
+    CoverageRestored:
+      name: coverage_restored
+      summary: A phone in the car is reporting again. Clear the warning.
+      payload:
+        type: object
+        required: [type]
+        properties:
+          type:
+            type: string
+            const: coverage_restored
+
     VehiclePosition:
       name: vehicle_position
       summary: A vehicle reported a new position.
@@ -219,20 +291,36 @@ components:
     StartSignal:
       name: start_signal
       summary: The synchronised 09:00 start. Every bound phone releases at once.
+      description: |
+        Sent to every bound or active session of the event within a second of
+        its start, read in the rally's zone (EVENT_TIME_ZONE). It is not sent
+        more than five minutes late: a server that comes back at noon does not
+        announce a 09:00 start.
+
+        Delivery is at least once. A server restart inside those five minutes
+        sends it again, so treat it as idempotent. A phone that was not
+        connected — or joined after the start — reads the same facts from
+        `GET /sessions/me` (`startsAt`, and the cipher once it has passed).
       payload:
         type: object
-        required: [type]
+        required: [type, startsAt]
         properties:
           type:
             type: string
             const: start_signal
+          startsAt:
+            type: string
+            format: date-time
+            description: The start instant this signal is for.
 
     CipherReveal:
       name: cipher_reveal
       summary: |
-        The rally cipher, withheld until the start. It is also readable from
-        `GET /sessions/me` once the event is active, for a phone that missed
-        the frame.
+        The rally cipher, withheld until the start. Sent immediately after
+        `start_signal`, on the same terms: at least once, idempotent, never
+        more than five minutes late. It is also readable from
+        `GET /sessions/me` once the start has passed, for a phone that missed
+        the frame. Not sent at all when the event has no cipher configured.
       payload:
         type: object
         required: [type, cipher]

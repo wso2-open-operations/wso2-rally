@@ -16,7 +16,11 @@
 
 package sessions
 
-import "time"
+import (
+	"time"
+
+	"github.com/wso2-open-operations/wso2-motor-rally/backend/internal/apperr"
+)
 
 // SessionDTO is a session on the wire.
 type SessionDTO struct {
@@ -54,11 +58,13 @@ type WaypointDTO struct {
 // SessionStateDTO is the whole in-car view: the session, the crew's course,
 // and the two geofences that bracket it.
 type SessionStateDTO struct {
-	Session        SessionDTO    `json:"session"`
-	VehicleCode    string        `json:"vehicleCode"`
-	TeamName       string        `json:"teamName"`
-	EventStatus    string        `json:"eventStatus"`
-	StartTime      string        `json:"startTime"`
+	Session     SessionDTO `json:"session"`
+	VehicleCode string     `json:"vehicleCode"`
+	TeamName    string     `json:"teamName"`
+	EventStatus string     `json:"eventStatus"`
+	StartTime   string     `json:"startTime"`
+	// StartsAt is the start as an instant (RFC 3339), null when unreadable.
+	StartsAt       *string       `json:"startsAt"`
 	Cipher         string        `json:"cipher"`
 	StartCircle    CircleDTO     `json:"startCircle"`
 	FinishCircle   CircleDTO     `json:"finishCircle"`
@@ -71,6 +77,10 @@ type SessionStateDTO struct {
 	// warns its owner when this is 1 and it is them, before they pocket the
 	// phone the whole car is relying on.
 	SharingCount int `json:"sharingCount"`
+	// CoverageLost is true while the car is on the course and no phone has
+	// reported for 30 s. Stricter than SharingCount reaching zero, which uses
+	// the looser 90 s sharing window: this is the value to drive the warning.
+	CoverageLost bool `json:"coverageLost"`
 }
 
 // JoinRequest is the POST /sessions/join body.
@@ -109,6 +119,28 @@ type LocationRequest struct {
 	Lat      float64 `json:"lat"`
 	Lng      float64 `json:"lng"`
 	Accuracy float64 `json:"accuracy"`
+	// Ts is when the fix was taken, ISO 8601. Optional: absent means "now",
+	// which is every live fix. The super app sets it on a buffered flush, so a
+	// burst of fixes taken over minutes is not judged as if it happened at once.
+	Ts *string `json:"ts"`
+}
+
+// TakenAt returns when the fix was taken, or the zero time when the client did
+// not say — which the service reads as "now".
+//
+// A ts that is present but unreadable is an error, never "now": falling back
+// would silently re-create the teleport the client sent it to avoid.
+func (r LocationRequest) TakenAt() (time.Time, error) {
+	if r.Ts == nil {
+		return time.Time{}, nil
+	}
+
+	takenAt, err := time.Parse(time.RFC3339Nano, *r.Ts)
+	if err != nil {
+		return time.Time{}, apperr.Validationf("ts must be an ISO 8601 timestamp, such as 2027-02-13T09:28:00Z")
+	}
+
+	return takenAt.UTC(), nil
 }
 
 // PingEventDTO is one thing the backend noticed about a reported position.
@@ -243,6 +275,7 @@ func toStateDTO(state SessionState, now time.Time) SessionStateDTO {
 		TeamName:       state.TeamName,
 		EventStatus:    state.EventStatus,
 		StartTime:      state.StartTime,
+		StartsAt:       startsAtOf(state.StartsAt),
 		Cipher:         state.Cipher,
 		StartCircle:    toCircleDTO(state.StartCircle),
 		FinishCircle:   toCircleDTO(state.FinishCircle),
@@ -251,6 +284,7 @@ func toStateDTO(state SessionState, now time.Time) SessionStateDTO {
 		Crew:           crew,
 		You:            toDeviceDTO(state.You, now),
 		SharingCount:   sharingCount(crew),
+		CoverageLost:   state.CoverageLost,
 	}
 }
 
@@ -315,4 +349,14 @@ func formatTime(t *time.Time) *string {
 	formatted := t.UTC().Format(time.RFC3339)
 
 	return &formatted
+}
+
+// startsAtOf renders the start instant, or null when the event's start could
+// not be read.
+func startsAtOf(t time.Time) *string {
+	if t.IsZero() {
+		return nil
+	}
+
+	return formatTime(&t)
 }

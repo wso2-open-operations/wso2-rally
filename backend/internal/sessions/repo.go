@@ -126,6 +126,101 @@ func (r *sqlRepo) LiveSessionOf(ctx context.Context, vehicleID string) (Session,
 	return session, nil
 }
 
+// ActiveEvents lists the events crews may currently run. The date is formatted
+// in SQL so the scheduler reads the wall-clock day exactly as the organizer
+// entered it, with no driver time-zone conversion in between.
+func (r *sqlRepo) ActiveEvents(ctx context.Context) ([]StartingEvent, error) {
+	const query = `
+		SELECT id, DATE_FORMAT(event_date, '%Y-%m-%d'), start_time, COALESCE(cipher, '')
+		FROM event WHERE status = 'active'`
+
+	rows, err := r.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("select active events: %w", err)
+	}
+	defer rows.Close()
+
+	var events []StartingEvent
+	for rows.Next() {
+		var e StartingEvent
+		if err := rows.Scan(&e.ID, &e.Date, &e.StartTime, &e.Cipher); err != nil {
+			return nil, fmt.Errorf("scan active event: %w", err)
+		}
+		events = append(events, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate active events: %w", err)
+	}
+
+	return events, nil
+}
+
+// LiveSessionIDsOf lists an event's bound and active runs, in bind order.
+func (r *sqlRepo) LiveSessionIDsOf(ctx context.Context, eventID string) ([]string, error) {
+	const query = `
+		SELECT id FROM team_session
+		WHERE event_id = ? AND status IN ('bound', 'active')
+		ORDER BY bound_at, id`
+
+	rows, err := r.db.QueryContext(ctx, query, eventID)
+	if err != nil {
+		return nil, fmt.Errorf("select live sessions of event %s: %w", eventID, err)
+	}
+	defer rows.Close()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan live session of event %s: %w", eventID, err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate live sessions of event %s: %w", eventID, err)
+	}
+
+	return ids, nil
+}
+
+// ActiveSessionCoverage lists every run on the course with the latest report
+// from any of its phones. It reads session_device.last_seen_at — stamped when a
+// report arrives — so "covered" means the same thing here as a phone's own
+// "sharing" flag: a phone was heard from, not that a fix was accepted.
+func (r *sqlRepo) ActiveSessionCoverage(ctx context.Context) ([]SessionCoverage, error) {
+	const query = `
+		SELECT s.id, s.event_id, v.code, MAX(d.last_seen_at)
+		FROM team_session s
+		JOIN vehicle v ON v.id = s.vehicle_id
+		LEFT JOIN session_device d ON d.session_id = s.id
+		WHERE s.status = 'active'
+		GROUP BY s.id, s.event_id, v.code`
+
+	rows, err := r.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("select coverage of active sessions: %w", err)
+	}
+	defer rows.Close()
+
+	var cars []SessionCoverage
+	for rows.Next() {
+		var (
+			car          SessionCoverage
+			lastReportAt sql.NullTime
+		)
+		if err := rows.Scan(&car.SessionID, &car.EventID, &car.VehicleCode, &lastReportAt); err != nil {
+			return nil, fmt.Errorf("scan session coverage: %w", err)
+		}
+		car.LastReportAt = timePtr(lastReportAt)
+		cars = append(cars, car)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate session coverage: %w", err)
+	}
+
+	return cars, nil
+}
+
 // deviceColumns is the shared select list, joined to crew_member so a phone can
 // be labelled with its owner's name without a second round trip.
 const deviceColumns = `
@@ -280,7 +375,7 @@ func (r *sqlRepo) UpdateSession(ctx context.Context, s Session) error {
 
 func (r *sqlRepo) EventInfoOf(ctx context.Context, eventID string) (EventInfo, error) {
 	const query = `
-		SELECT status, COALESCE(cipher, ''), start_time,
+		SELECT status, COALESCE(cipher, ''), DATE_FORMAT(event_date, '%Y-%m-%d'), start_time,
 		       start_lat, start_lng, start_radius_m,
 		       end_lat, end_lng, end_radius_m
 		FROM event WHERE id = ?`
@@ -292,7 +387,7 @@ func (r *sqlRepo) EventInfoOf(ctx context.Context, eventID string) (EventInfo, e
 		startRadiusM, endRadiusM int
 	)
 	err := r.db.QueryRowContext(ctx, query, eventID).Scan(
-		&info.Status, &info.Cipher, &info.StartTime,
+		&info.Status, &info.Cipher, &info.Date, &info.StartTime,
 		&startLat, &startLng, &startRadiusM,
 		&endLat, &endLng, &endRadiusM,
 	)

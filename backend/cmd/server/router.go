@@ -17,6 +17,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"log/slog"
 	"net/http"
@@ -45,6 +46,10 @@ type deps struct {
 	db        *sql.DB
 	logger    *slog.Logger
 	organizer middleware.OrganizerValidator
+	// background bounds the work that runs beside the request path — today,
+	// the start-signal and location-coverage checks. Nil runs none of it,
+	// which is what a test that only exercises routes wants.
+	background context.Context
 }
 
 // newRouter assembles the middleware stack and mounts every domain.
@@ -87,7 +92,14 @@ func newRouter(d deps) http.Handler {
 		sessions.HMACTokenMinter{Secret: d.cfg.TeamTokenSecret, TTL: d.cfg.TeamTokenTTL},
 		alertsService,
 		newSessionBroadcaster(hub, scoringService, d.logger),
+		d.cfg.EventZone,
 	)
+	if d.background != nil {
+		go runPeriodically(d.background, "start signal",
+			sessionsService.FireDueStartSignals, backgroundInterval, d.logger)
+		go runPeriodically(d.background, "location coverage",
+			sessionsService.CheckCoverage, backgroundInterval, d.logger)
+	}
 	sessionsHandler := sessions.NewHandler(sessionsService, d.logger)
 
 	// Live updates, in their own group: a browser can set no Authorization
@@ -110,7 +122,6 @@ func newRouter(d deps) http.Handler {
 		// it sits under Auth but above every role gate: the caller is a crew
 		// member with no organizer group, and the roster decides, not a role.
 		sessionsHandler.RegisterJoin(r)
-
 
 		// Readable by either identity. Mounted above the role gates because
 		// chi cannot carry the same path in two sibling groups; the handler
