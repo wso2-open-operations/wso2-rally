@@ -23,15 +23,24 @@ window.config = {
   //
   // IS_MICROAPP  (required in the super app; omit or false for browser dev)
   //   true  → take the Asgardeo token from the super app's native bridge.
-  //   false → sign in through Asgardeo in the browser, so the app is
-  //           developable on a laptop.
+  //   false → desktop-browser development: use DEV_SUPER_APP_TOKEN below.
   //   Must be the boolean true, not the string "true".
   IS_MICROAPP: false,
 
-  // ── Asgardeo (only used when IS_MICROAPP is false) ─────────────────────────
+  // DEV_SUPER_APP_TOKEN  (browser development only; ignored when IS_MICROAPP)
+  //   Stands in for the token the super app would hand over. POST /sessions/join
+  //   reads its `email` claim to find the crew member on the vehicle's roster,
+  //   so it must be a JWT whose email is on that roster. A local backend with
+  //   TOKEN_VALIDATOR_ENABLED=false decodes it without checking the signature,
+  //   so a hand-made token works there; a deployed backend needs a real one.
+  //   Never set this in a config.js that ships inside the zip.
+  DEV_SUPER_APP_TOKEN: "",
+
+  // ── Asgardeo (reserved; not read yet) ──────────────────────────────────────
   //
-  // Embedded, the super app owns the OIDC flow and hands over a token minted
-  // for the clientId in microapp.json — these four are then ignored.
+  // For a browser sign-in flow that would replace DEV_SUPER_APP_TOKEN. Embedded,
+  // the super app owns the OIDC flow and hands over a token minted for the
+  // clientId in microapp.json, so these are never needed on a phone.
   ASGARDEO_BASE_URL: "https://api.asgardeo.io/t/<your-tenant>",
   CLIENT_ID: "<your-client-id>",
   SIGN_IN_REDIRECT_URL: "http://localhost:3001",
