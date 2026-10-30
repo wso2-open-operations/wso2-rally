@@ -85,6 +85,11 @@ func (r *sqlRepo) ProgressOf(ctx context.Context, eventID string) ([]VehicleProg
 			s.last_lng,
 			s.last_ping_at,
 			(
+				SELECT MAX(d.last_seen_at)
+				FROM session_device d
+				WHERE d.session_id = s.id
+			) AS last_report_at,
+			(
 				SELECT COUNT(*)
 				FROM waypoint w
 				JOIN waypoint_task wt ON wt.waypoint_id = w.id
@@ -110,17 +115,22 @@ func (r *sqlRepo) ProgressOf(ctx context.Context, eventID string) ([]VehicleProg
 	var progress []VehicleProgress
 	for rows.Next() {
 		var (
-			row        VehicleProgress
-			lastSeenAt sql.NullTime
+			row          VehicleProgress
+			lastSeenAt   sql.NullTime
+			lastReportAt sql.NullTime
 		)
 		if err := rows.Scan(&row.VehicleCode, &row.TeamName, &row.Status, &row.SessionStatus,
-			&row.TotalScore, &row.LastLat, &row.LastLng, &lastSeenAt,
+			&row.TotalScore, &row.LastLat, &row.LastLng, &lastSeenAt, &lastReportAt,
 			&row.TotalTasks, &row.Done); err != nil {
 			return nil, fmt.Errorf("scan vehicle progress: %w", err)
 		}
 		if lastSeenAt.Valid {
 			at := lastSeenAt.Time
 			row.LastSeenAt = &at
+		}
+		if lastReportAt.Valid {
+			at := lastReportAt.Time
+			row.LastReportAt = &at
 		}
 		progress = append(progress, row)
 	}
@@ -144,4 +154,20 @@ func (r *sqlRepo) OpenAlertCountOf(ctx context.Context, eventID string) (int, er
 	}
 
 	return count, nil
+}
+
+// EventStartOf reads the event's wall-clock start. The date is formatted in
+// SQL, as the in-car runtime reads it, so no driver time-zone conversion moves
+// the day.
+func (r *sqlRepo) EventStartOf(ctx context.Context, eventID string) (string, string, error) {
+	const query = `
+		SELECT DATE_FORMAT(event_date, '%Y-%m-%d'), start_time
+		FROM event WHERE id = ?`
+
+	var date, startTime string
+	if err := r.db.QueryRowContext(ctx, query, eventID).Scan(&date, &startTime); err != nil {
+		return "", "", fmt.Errorf("select start of event %s: %w", eventID, err)
+	}
+
+	return date, startTime, nil
 }

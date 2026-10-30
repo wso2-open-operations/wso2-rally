@@ -123,7 +123,23 @@ func TestHub_UnsubscribeIsIdempotent(t *testing.T) {
 func TestHub_BroadcastToAnEmptyTopicIsSafe(t *testing.T) {
 	hub := newTestHub(t)
 
-	require.NotPanics(t, func() { hub.Broadcast("nobody-here", map[string]any{"type": "alert"}) })
+	require.NotPanics(t, func() {
+		require.True(t, hub.Broadcast("nobody-here", map[string]any{"type": "alert"}), "nobody missed it")
+	})
+}
+
+// A frame shed from a full buffer is reported, so a caller holding one that
+// nothing later supersedes — the start signal — knows to send it again.
+func TestHub_BroadcastReportsADroppedFrame(t *testing.T) {
+	hub := newTestHub(t)
+	_, unsubscribe := hub.Subscribe(testTopic)
+	defer unsubscribe()
+
+	for range subscriberBuffer {
+		require.True(t, hub.Broadcast(testTopic, map[string]any{"type": "vehicle_position"}))
+	}
+
+	require.False(t, hub.Broadcast(testTopic, map[string]any{"type": "start_signal"}), "the buffer is full")
 }
 
 // A screen that stops reading must not block the crew whose submission
@@ -154,7 +170,9 @@ func TestHub_UnencodableMessageIsLoggedNotPanicked(t *testing.T) {
 	messages, unsubscribe := hub.Subscribe(testTopic)
 	defer unsubscribe()
 
-	require.NotPanics(t, func() { hub.Broadcast(testTopic, make(chan int)) })
+	require.NotPanics(t, func() {
+		require.False(t, hub.Broadcast(testTopic, make(chan int)), "nobody got it")
+	})
 
 	select {
 	case <-messages:

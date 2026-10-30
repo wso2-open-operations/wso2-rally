@@ -47,6 +47,9 @@ type VehicleProgressDTO struct {
 	LastLat       *float64 `json:"lastLat"`
 	LastLng       *float64 `json:"lastLng"`
 	LastSeenAt    *string  `json:"lastSeenAt"`
+	LastReportAt  *string  `json:"lastReportAt"`
+	// CoverageLost flags a car on the course with no phone sharing location.
+	CoverageLost bool `json:"coverageLost"`
 }
 
 // MonitorSnapshotDTO is the whole live-monitor payload.
@@ -124,6 +127,8 @@ func toProgressDTOs(list []VehicleProgress) []VehicleProgressDTO {
 			LastLat:       row.LastLat,
 			LastLng:       row.LastLng,
 			LastSeenAt:    formatTime(row.LastSeenAt),
+			LastReportAt:  formatTime(row.LastReportAt),
+			CoverageLost:  row.CoverageLost,
 		})
 	}
 

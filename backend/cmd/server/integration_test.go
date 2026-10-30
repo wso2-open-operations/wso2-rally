@@ -69,6 +69,7 @@ func newRally(t *testing.T) *rally {
 		AdminRole:       adminRole,
 		OrganizerRole:   adminRole, // what Load() defaults to when ORGANIZER_ROLE is unset
 		LogLevel:        "ERROR",
+		EventZone:       time.UTC, // Load() always resolves one; an event's start is read in it
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 

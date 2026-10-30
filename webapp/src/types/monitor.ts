@@ -32,7 +32,19 @@ export interface VehicleProgress {
   totalScore: number;
   lastLat: number | null;
   lastLng: number | null;
+  /** When the car's last accepted fix was taken. */
   lastSeenAt: string | null;
+  /**
+   * When any phone in the car last reported, stamped on arrival. A replayed
+   * buffer carries old fix times, so this is what says the car is covered now.
+   */
+  lastReportAt: string | null;
+  /**
+   * A car on the course whose phones have all been silent for over 30 s —
+   * the driver is in Google Maps and no passenger is sharing, so its
+   * geofences are not being evaluated.
+   */
+  coverageLost: boolean;
 }
 
 /** `GET /events/{id}/monitor`. Mirrors `MonitorSnapshotDTO`. */
@@ -97,10 +109,26 @@ export interface LeaderboardMessage {
   entries: unknown[];
 }
 
+/** A car on the course has gone dark: no phone reporting for 30 s. */
+export interface CoverageLostMessage {
+  type: "coverage_lost";
+  vehicleCode: string;
+  /** Null when no phone in the car ever reported. */
+  lastReportAt: string | null;
+}
+
+/** A dark car is reporting again, or has finished. */
+export interface CoverageRestoredMessage {
+  type: "coverage_restored";
+  vehicleCode: string;
+}
+
 /** Any message the organizer topic carries. */
 export type MonitorMessage =
   | VehiclePositionMessage
   | TaskCompletedMessage
   | ScoreDeltaMessage
   | AlertMessage
-  | LeaderboardMessage;
+  | LeaderboardMessage
+  | CoverageLostMessage
+  | CoverageRestoredMessage;

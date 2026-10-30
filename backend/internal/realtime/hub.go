@@ -129,25 +129,30 @@ func (h *Hub) Subscribe(topic string) (<-chan []byte, func()) {
 //
 // It never blocks: a subscriber whose buffer is full misses this message. That
 // is the right trade for live views, where the next update supersedes this one
-// anyway.
-func (h *Hub) Broadcast(topic string, message any) {
+// anyway. For a message nothing supersedes, the result says whether every
+// current subscriber got it, so the caller can send it again.
+func (h *Hub) Broadcast(topic string, message any) bool {
 	encoded, err := json.Marshal(message)
 	if err != nil {
 		h.logger.Error("failed to encode broadcast", "error", err, "topic", topic)
-		return
+		return false
 	}
 
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 
+	delivered := true
 	for sub := range h.topics[topic] {
 		select {
 		case sub.messages <- encoded:
 		default:
+			delivered = false
 			h.dropped.Add(1)
 			h.logger.Warn("dropped a broadcast to a slow subscriber", "topic", topic)
 		}
 	}
+
+	return delivered
 }
 
 // SubscriberCount reports how many clients are listening to a topic. It exists

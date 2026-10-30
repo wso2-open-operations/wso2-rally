@@ -158,3 +158,43 @@ func TestLogLevel_ParsesKnownLevels(t *testing.T) {
 		})
 	}
 }
+
+// An organizer types "09:00" meaning 09:00 in Sri Lanka. A Choreo pod runs in
+// UTC, so without a configured zone every car would be released five and a
+// half hours late.
+func TestLoad_EventTimeZoneDefaultsToColombo(t *testing.T) {
+	t.Setenv("DB_DSN", "user:pass@tcp(localhost:3306)/rally")
+	t.Setenv("TEAM_TOKEN_SECRET", "s3cret")
+	t.Setenv("TOKEN_VALIDATOR_ENABLED", "false")
+	t.Setenv("EVENT_TIME_ZONE", "")
+
+	cfg, err := Load()
+
+	require.NoError(t, err)
+	require.Equal(t, "Asia/Colombo", cfg.EventZone.String())
+}
+
+func TestLoad_EventTimeZoneIsConfigurable(t *testing.T) {
+	t.Setenv("DB_DSN", "user:pass@tcp(localhost:3306)/rally")
+	t.Setenv("TEAM_TOKEN_SECRET", "s3cret")
+	t.Setenv("TOKEN_VALIDATOR_ENABLED", "false")
+	t.Setenv("EVENT_TIME_ZONE", "Europe/London")
+
+	cfg, err := Load()
+
+	require.NoError(t, err)
+	require.Equal(t, "Europe/London", cfg.EventZone.String())
+}
+
+// A zone that cannot be loaded must stop the server, not fall back to UTC and
+// start the rally at the wrong hour.
+func TestLoad_UnknownEventTimeZoneFails(t *testing.T) {
+	t.Setenv("DB_DSN", "user:pass@tcp(localhost:3306)/rally")
+	t.Setenv("TEAM_TOKEN_SECRET", "s3cret")
+	t.Setenv("TOKEN_VALIDATOR_ENABLED", "false")
+	t.Setenv("EVENT_TIME_ZONE", "Mars/Olympus_Mons")
+
+	_, err := Load()
+
+	require.ErrorContains(t, err, "EVENT_TIME_ZONE")
+}

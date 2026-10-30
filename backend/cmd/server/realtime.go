@@ -107,12 +107,12 @@ func maySubscribe(identity authz.Identity, topic string, cfg config.Config) bool
 // is derived from every team's total, so no single domain can produce it, and
 // composing it here keeps sessions from depending on scoring.
 func newSessionBroadcaster(hub *realtime.Hub, scores *scoring.Service, logger *slog.Logger) sessions.Broadcaster {
-	return func(topic string, message any) {
-		hub.Broadcast(topic, message)
+	return func(topic string, message any) bool {
+		delivered := hub.Broadcast(topic, message)
 
 		eventID, ok := strings.CutPrefix(topic, eventTopicPrefix)
 		if !ok || !isScoreDelta(message) {
-			return
+			return delivered
 		}
 
 		// Deliberately not the request context: the pavilion screen still
@@ -124,9 +124,11 @@ func newSessionBroadcaster(hub *realtime.Hub, scores *scoring.Service, logger *s
 		if err != nil {
 			logger.Error("failed to refresh the leaderboard after a score change",
 				"error", err, "event_id", eventID)
-			return
+			return delivered
 		}
 		hub.Broadcast(topic, map[string]any{"type": "leaderboard", "entries": entries})
+
+		return delivered
 	}
 }
 

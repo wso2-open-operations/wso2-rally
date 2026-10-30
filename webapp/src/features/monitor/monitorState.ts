@@ -74,6 +74,8 @@ const adopted = (vehicleCode: string): VehicleLive => ({
   lat: null,
   lng: null,
   lastSeenAt: null,
+  lastReportAt: null,
+  coverageLost: false,
 });
 
 /**
@@ -99,7 +101,46 @@ export function monitorReducer(
         ...state,
         vehicles: {
           ...state.vehicles,
-          [message.vehicleCode]: { ...previous, lat: message.lat, lng: message.lng },
+          // A position is proof some phone is reporting, so a dark flag clears
+          // here rather than waiting up to a second for coverage_restored.
+          [message.vehicleCode]: {
+            ...previous,
+            lat: message.lat,
+            lng: message.lng,
+            coverageLost: false,
+          },
+        },
+      };
+    }
+
+    case "coverage_lost": {
+      const previous = state.vehicles[message.vehicleCode] ?? adopted(message.vehicleCode);
+
+      return {
+        ...state,
+        vehicles: {
+          ...state.vehicles,
+          [message.vehicleCode]: {
+            ...previous,
+            coverageLost: true,
+            lastReportAt: message.lastReportAt,
+          },
+        },
+      };
+    }
+
+    case "coverage_restored": {
+      const previous = state.vehicles[message.vehicleCode];
+      // A restore for a car this monitor never saw go dark changes nothing.
+      if (!previous || !previous.coverageLost) {
+        return state;
+      }
+
+      return {
+        ...state,
+        vehicles: {
+          ...state.vehicles,
+          [message.vehicleCode]: { ...previous, coverageLost: false },
         },
       };
     }
@@ -254,6 +295,14 @@ export function parseMonitorMessage(raw: string): MonitorMessage | null {
 
     case "alert":
       return isAlertPayload(message.alert) ? (message as unknown as MonitorMessage) : null;
+
+    case "coverage_lost":
+      return isCode && (message.lastReportAt === null || typeof message.lastReportAt === "string")
+        ? (message as unknown as MonitorMessage)
+        : null;
+
+    case "coverage_restored":
+      return isCode ? (message as unknown as MonitorMessage) : null;
 
     case "leaderboard":
       return { type: "leaderboard", entries: [] };

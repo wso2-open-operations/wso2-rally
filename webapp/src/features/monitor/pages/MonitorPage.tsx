@@ -15,7 +15,7 @@
 // under the License.
 
 import { useCallback, useEffect, useMemo, useReducer, useState, type JSX } from "react";
-import { Box, Chip, Skeleton, Typography } from "@wso2/oxygen-ui";
+import { Alert, Box, Chip, Skeleton, Typography } from "@wso2/oxygen-ui";
 import EventSelect from "@components/event-select/EventSelect";
 import AlertsStrip from "@features/monitor/components/AlertsStrip";
 import CompletionMatrix from "@features/monitor/components/CompletionMatrix";
@@ -104,6 +104,10 @@ export default function MonitorPage(): JSX.Element {
   });
 
   const vehicles = useMemo(() => Object.values(state.vehicles), [state.vehicles]);
+  const dark = useMemo(
+    () => vehicles.filter((vehicle) => vehicle.coverageLost).map((vehicle) => vehicle.vehicleCode).sort(),
+    [vehicles],
+  );
 
   return (
     <Box sx={{ display: "flex", flexDirection: "column", gap: 2, width: "100%" }}>
@@ -131,6 +135,17 @@ export default function MonitorPage(): JSX.Element {
           selectedEventId={selectedEventId}
         />
       </Box>
+
+      {dark.length > 0 && (
+        // A dark car is not a problem the crew has reported — they may not know.
+        // Its geofences are not being evaluated, so checkpoints it passes unlock
+        // nothing until someone's phone reports again. That is worth a call.
+        <Alert role="alert" severity="warning">
+          {dark.length === 1 ? "1 car has" : `${dark.length} cars have`} no phone
+          sharing location ({dark.join(", ")}). Checkpoints they pass will not
+          unlock until a crew member keeps the rally app open.
+        </Alert>
+      )}
 
       <Box sx={{ display: "flex", flexWrap: "wrap", gap: 2, alignItems: "flex-start" }}>
         {isLoading ? (

@@ -34,6 +34,8 @@ const (
 	defaultLogLevel     = "INFO"
 	defaultAdminRole    = "rally-admin"
 	defaultTeamTokenTTL = 12 * time.Hour
+	// defaultEventTimeZone is where the rally is run.
+	defaultEventTimeZone = "Asia/Colombo"
 )
 
 // Config holds every runtime setting the server needs. It is read once at
@@ -74,6 +76,10 @@ type Config struct {
 	CORSAllowOrigin string
 	// LogLevel is one of DEBUG, INFO, WARN, ERROR.
 	LogLevel string
+	// EventZone is the rally's wall clock. An event's start time is typed as
+	// "09:00" and means 09:00 here, not in the server's zone — a Choreo pod
+	// runs in UTC. Set by EVENT_TIME_ZONE, an IANA name.
+	EventZone *time.Location
 }
 
 // Load reads the configuration from the process environment.
@@ -99,6 +105,15 @@ func Load() (Config, error) {
 	if c.OrganizerRole == "" {
 		c.OrganizerRole = c.AdminRole
 	}
+
+	// No fallback to UTC on a bad name: the zone decides when every car is
+	// released, and starting at the wrong hour is worse than not starting.
+	zoneName := getenv("EVENT_TIME_ZONE", defaultEventTimeZone)
+	zone, err := time.LoadLocation(zoneName)
+	if err != nil {
+		return Config{}, fmt.Errorf("config error: EVENT_TIME_ZONE %q is not a known time zone: %w", zoneName, err)
+	}
+	c.EventZone = zone
 
 	if raw := os.Getenv("TEAM_TOKEN_TTL"); raw != "" {
 		ttl, err := time.ParseDuration(raw)

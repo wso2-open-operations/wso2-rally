@@ -171,18 +171,25 @@ export default function LiveMap({
 
           {placed.map((vehicle) => {
             const color = colorOf(vehicle);
+            // A dark car's marker is where it was, not where it is. Drawing it
+            // hollow and dashed keeps it on the map without passing a stale
+            // position off as a live one.
+            const pathOptions = vehicle.coverageLost
+              ? { color, dashArray: "3 3", fillOpacity: 0, weight: 2 }
+              : { color, fillColor: color, fillOpacity: 1 };
 
             return (
               <CircleMarker
                 center={[vehicle.lat as number, vehicle.lng as number]}
                 key={vehicle.vehicleCode}
-                pathOptions={{ color, fillColor: color, fillOpacity: 1 }}
+                pathOptions={pathOptions}
                 radius={7}
               >
                 <Tooltip>
                   {vehicle.vehicleCode}
                   {vehicle.teamName ? ` · ${vehicle.teamName}` : ""} ·{" "}
                   {vehicle.done}/{vehicle.totalTasks || "?"}
+                  {vehicle.coverageLost ? " · no location — last known position" : ""}
                 </Tooltip>
               </CircleMarker>
             );
@@ -192,7 +199,7 @@ export default function LiveMap({
       <Typography color="text.secondary" sx={{ mt: 0.5 }} variant="caption">
         {placed.length === 0
           ? "No vehicle has reported a position yet."
-          : `${placed.length} of ${vehicles.length} vehicles reporting. Green is running, amber a device issue, red a breakdown, blue finished.`}
+          : `${placed.length} of ${vehicles.length} vehicles reporting. Green is running, amber a device issue, red a breakdown, blue finished; hollow means no phone is sharing location.`}
       </Typography>
     </Box>
   );

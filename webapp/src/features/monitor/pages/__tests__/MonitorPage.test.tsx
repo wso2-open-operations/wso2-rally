@@ -54,6 +54,8 @@ const snapshot: MonitorSnapshot = {
       lastLat: 6.89,
       lastLng: 79.92,
       lastSeenAt: "2027-02-13T09:30:00Z",
+      lastReportAt: "2027-02-13T09:30:00Z",
+      coverageLost: false,
     },
     {
       vehicleCode: "PKT-002",
@@ -66,6 +68,8 @@ const snapshot: MonitorSnapshot = {
       lastLat: null,
       lastLng: null,
       lastSeenAt: null,
+      lastReportAt: null,
+      coverageLost: false,
     },
   ],
 };
@@ -250,6 +254,26 @@ describe("MonitorPage", () => {
 
   // A malformed frame is untrusted input arriving mid-rally; it must not take
   // the monitor down.
+  it("flags a car whose phones have all gone quiet, and clears it when one reports", async () => {
+    renderPage();
+    await screen.findByText("10/15");
+    const socket = FakeSocket.instances[0];
+    socket.open();
+    expect(screen.queryByText("No location")).not.toBeInTheDocument();
+
+    socket.send({ type: "coverage_lost", vehicleCode: "PKT-001", lastReportAt: "2027-02-13T09:30:00Z" });
+
+    expect(await screen.findByText("No location")).toBeInTheDocument();
+    expect(
+      screen.getByText(/1 car has no phone sharing location/),
+    ).toBeInTheDocument();
+
+    socket.send({ type: "coverage_restored", vehicleCode: "PKT-001" });
+
+    await waitFor(() => expect(screen.queryByText("No location")).not.toBeInTheDocument());
+    expect(screen.queryByText(/no phone sharing location/)).not.toBeInTheDocument();
+  });
+
   it("ignores a junk frame and keeps rendering", async () => {
     renderPage();
     await screen.findByText("10/15");

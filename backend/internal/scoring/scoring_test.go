@@ -25,6 +25,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/wso2-open-operations/wso2-motor-rally/backend/internal/apperr"
+	"github.com/wso2-open-operations/wso2-motor-rally/backend/internal/sessions"
 )
 
 const eventID = "0123456789abcdef0123456789abcdef"
@@ -39,6 +40,17 @@ type fakeRepo struct {
 	progress   []VehicleProgress
 	openAlerts int
 	err        error
+	// eventDate and eventStartTime are the event's wall-clock start.
+	eventDate      string
+	eventStartTime string
+	startErr       error
+}
+
+// newService reads event starts in UTC, so a test's "09:00" is 09:00 UTC.
+func newService(repo *fakeRepo) *Service { return NewService(repo, time.UTC) }
+
+func (f *fakeRepo) EventStartOf(context.Context, string) (string, string, error) {
+	return f.eventDate, f.eventStartTime, f.startErr
 }
 
 func (f *fakeRepo) StandingsOf(context.Context, string) ([]Standing, error) {
@@ -139,7 +151,7 @@ func TestRank_DoesNotMutateItsInput(t *testing.T) {
 }
 
 func TestService_Leaderboard(t *testing.T) {
-	svc := NewService(&fakeRepo{standings: []Standing{
+	svc := newService(&fakeRepo{standings: []Standing{
 		{VehicleCode: "PKT-002", TotalScore: 100},
 		{VehicleCode: "PKT-001", TotalScore: 500},
 	}})
@@ -151,19 +163,21 @@ func TestService_Leaderboard(t *testing.T) {
 }
 
 func TestService_Leaderboard_RequiresEventID(t *testing.T) {
-	_, err := NewService(&fakeRepo{}).Leaderboard(context.Background(), "")
+	_, err := newService(&fakeRepo{}).Leaderboard(context.Background(), "")
 
 	require.ErrorIs(t, err, apperr.ErrValidation)
 }
 
 func TestService_Leaderboard_PropagatesRepoFailure(t *testing.T) {
-	_, err := NewService(&fakeRepo{err: errors.New("db down")}).Leaderboard(context.Background(), eventID)
+	_, err := newService(&fakeRepo{err: errors.New("db down")}).Leaderboard(context.Background(), eventID)
 
 	require.ErrorContains(t, err, "db down")
 }
 
 func TestService_MonitorSnapshot(t *testing.T) {
-	svc := NewService(&fakeRepo{
+	svc := newService(&fakeRepo{
+		eventDate:      "2027-02-13",
+		eventStartTime: "09:00",
 		progress: []VehicleProgress{
 			{VehicleCode: "PKT-001", Status: "ok", SessionStatus: "active", Done: 3, TotalTasks: 15},
 			{VehicleCode: "PKT-002", Status: "breakdown", SessionStatus: ""},
@@ -181,7 +195,104 @@ func TestService_MonitorSnapshot(t *testing.T) {
 }
 
 func TestService_MonitorSnapshot_RequiresEventID(t *testing.T) {
-	_, err := NewService(&fakeRepo{}).MonitorSnapshot(context.Background(), "")
+	_, err := newService(&fakeRepo{}).MonitorSnapshot(context.Background(), "")
 
 	require.ErrorIs(t, err, apperr.ErrValidation)
+}
+
+// A monitor opened mid-rally must show a dark car straight away, not wait for
+// the next coverage_lost frame — which, for a car already dark, never comes.
+func TestService_MonitorSnapshot_FlagsCarsWithNoPhoneSharing(t *testing.T) {
+	now := time.Date(2027, 2, 13, 10, 0, 0, 0, time.UTC)
+	reported := func(ago time.Duration) *time.Time {
+		at := now.Add(-ago)
+		return &at
+	}
+	svc := newService(&fakeRepo{eventDate: "2027-02-13", eventStartTime: "09:00", progress: []VehicleProgress{
+		{VehicleCode: "LIVE", SessionStatus: "active", LastReportAt: reported(5 * time.Second)},
+		{VehicleCode: "DARK", SessionStatus: "active", LastReportAt: reported(45 * time.Second)},
+		{VehicleCode: "NEVER", SessionStatus: "active"},
+		// Only a car on the course can go dark. One still on the grid, or one
+		// that has finished, is not expected to be reporting.
+		{VehicleCode: "GRID", SessionStatus: "bound", LastReportAt: reported(time.Hour)},
+		{VehicleCode: "DONE", SessionStatus: "finished", LastReportAt: reported(time.Hour)},
+	}})
+	svc.now = func() time.Time { return now }
+
+	got, err := svc.MonitorSnapshot(context.Background(), eventID)
+
+	require.NoError(t, err)
+	flagged := map[string]bool{}
+	for _, vehicle := range got.Vehicles {
+		flagged[vehicle.VehicleCode] = vehicle.CoverageLost
+	}
+	require.Equal(t, map[string]bool{
+		"LIVE": false, "DARK": true, "NEVER": true, "GRID": false, "DONE": false,
+	}, flagged)
+}
+
+// A session turns active on its first ping, which can come from the grid long
+// before the start. The monitor agrees with the coverage frames: a crew that
+// locked its phones on the grid is not dark until the rally starts without it.
+func TestService_MonitorSnapshot_CountsSilenceFromTheStart(t *testing.T) {
+	nineAM := time.Date(2027, 2, 13, 9, 0, 0, 0, time.UTC)
+	onTheGrid := nineAM.Add(-30 * time.Minute)
+	svc := newService(&fakeRepo{eventDate: "2027-02-13", eventStartTime: "09:00", progress: []VehicleProgress{
+		{VehicleCode: "QUIET", SessionStatus: "active", LastReportAt: &onTheGrid},
+		{VehicleCode: "NEVER", SessionStatus: "active"},
+	}})
+	flaggedAt := func(now time.Time) map[string]bool {
+		svc.now = func() time.Time { return now }
+		got, err := svc.MonitorSnapshot(context.Background(), eventID)
+		require.NoError(t, err)
+		flagged := map[string]bool{}
+		for _, vehicle := range got.Vehicles {
+			flagged[vehicle.VehicleCode] = vehicle.CoverageLost
+		}
+		return flagged
+	}
+
+	require.Equal(t, map[string]bool{"QUIET": false, "NEVER": false}, flaggedAt(nineAM.Add(-time.Minute)))
+	require.Equal(t, map[string]bool{"QUIET": false, "NEVER": false},
+		flaggedAt(nineAM.Add(sessions.CoverageAlarmAfter)))
+	require.Equal(t, map[string]bool{"QUIET": true, "NEVER": true},
+		flaggedAt(nineAM.Add(sessions.CoverageAlarmAfter+time.Second)))
+}
+
+// A start that cannot be read is a guard that cannot judge: each car is judged
+// by its last report alone, and flagged rather than assumed covered.
+func TestService_MonitorSnapshot_AnUnreadableStartJudgesByReportsAlone(t *testing.T) {
+	now := time.Date(2027, 2, 13, 10, 0, 0, 0, time.UTC)
+	lastHeard := now.Add(-45 * time.Second)
+	svc := newService(&fakeRepo{eventDate: "2027-02-13", eventStartTime: "whenever", progress: []VehicleProgress{
+		{VehicleCode: "DARK", SessionStatus: "active", LastReportAt: &lastHeard},
+	}})
+	svc.now = func() time.Time { return now }
+
+	got, err := svc.MonitorSnapshot(context.Background(), eventID)
+
+	require.NoError(t, err)
+	require.True(t, got.Vehicles[0].CoverageLost)
+}
+
+func TestService_MonitorSnapshot_PropagatesAStartLookupFailure(t *testing.T) {
+	svc := newService(&fakeRepo{startErr: errors.New("db down"), progress: []VehicleProgress{
+		{VehicleCode: "PKT-001", SessionStatus: "active"},
+	}})
+
+	_, err := svc.MonitorSnapshot(context.Background(), eventID)
+
+	require.ErrorContains(t, err, "db down")
+}
+
+// With no car on the course there is no coverage to judge, so the start is not
+// looked up — and a monitor opened before the rally cannot fail on it.
+func TestService_MonitorSnapshot_NoStartLookupWithNobodyOnTheCourse(t *testing.T) {
+	svc := newService(&fakeRepo{startErr: errors.New("db down"), progress: []VehicleProgress{
+		{VehicleCode: "PKT-001", SessionStatus: "bound"},
+	}})
+
+	_, err := svc.MonitorSnapshot(context.Background(), eventID)
+
+	require.NoError(t, err)
 }
