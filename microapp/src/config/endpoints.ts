@@ -37,6 +37,11 @@ export interface RallyMicroAppConfig {
   SIGN_OUT_REDIRECT_URL?: string;
   /** True when running inside the super app's WebView. */
   IS_MICROAPP?: boolean;
+  /**
+   * Desktop-browser development only: stands in for the super app's token when
+   * `IS_MICROAPP` is false. See `public/config.js.example`.
+   */
+  DEV_SUPER_APP_TOKEN?: string;
 }
 
 declare global {
@@ -98,7 +103,7 @@ export const SESSIONS_FINISH = "/sessions/me/finish";
 export const SESSIONS_VOUCHERS = "/sessions/me/vouchers";
 
 /** One task definition, redacted by the backend for a crew caller. */
-export const TASK = (id: string): string => `/tasks/${id}`;
+export const TASK = (id: string): string => `/tasks/${encodeURIComponent(id)}`;
 
 /** Scores one attempt at a task. */
-export const SUBMIT = (taskId: string): string => `/sessions/me/tasks/${taskId}/submit`;
+export const SUBMIT = (taskId: string): string => `/sessions/me/tasks/${encodeURIComponent(taskId)}/submit`;

@@ -23,8 +23,8 @@
  * start line, not a build error, so it is worth asserting mechanically.
  *
  * This checks what is checkable without a device: that every emitted reference
- * is relative, that the runtime config is in the bundle, and that the zip would
- * have `index.html` at its root. Actually rendering inside the WebView still
+ * is relative, that the runtime config is in the bundle and is a release one,
+ * and that the zip would have `index.html` at its root. Actually rendering inside the WebView still
  * has to be done on a phone or simulator.
  *
  *   node scripts/verify-file-protocol.mjs
@@ -32,6 +32,7 @@
 
 import { readdirSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import { runInNewContext } from "node:vm";
 
 const DIST = "dist";
 const problems = [];
@@ -70,6 +71,7 @@ if (references.includes("./config.js")) {
 }
 if (existsSync(join(DIST, "config.js"))) {
   ok("config.js is in the build");
+  checkReleaseConfig(readFileSync(join(DIST, "config.js"), "utf8"));
 } else {
   bad("config.js is missing from dist/ — copy public/config.js.example to public/config.js before building");
 }
@@ -101,3 +103,36 @@ if (problems.length > 0) {
   process.exit(1);
 }
 console.log("\nAll checks passed. Rendering inside the WebView still needs a device.");
+
+/**
+ * The zip ships config.js exactly as built, so it has to be a release config. A
+ * browser-development one would reach every phone: without IS_MICROAPP the app
+ * never asks the super app for a token, and a DEV_SUPER_APP_TOKEN would join
+ * every crew as the developer who set it. The file is run, not searched,
+ * because its comments name both keys.
+ */
+function checkReleaseConfig(source) {
+  const sandbox = { window: {} };
+  try {
+    runInNewContext(source, sandbox, { filename: "config.js", timeout: 1_000 });
+  } catch (error) {
+    bad(`config.js does not run: ${error instanceof Error ? error.message : String(error)}`);
+    return;
+  }
+
+  const config = sandbox.window.config;
+  if (typeof config !== "object" || config === null) {
+    bad("config.js does not set window.config");
+    return;
+  }
+  if (config.IS_MICROAPP === true) {
+    ok("config.js sets IS_MICROAPP: true, so the token comes from the super app");
+  } else {
+    bad("config.js does not set IS_MICROAPP: true (the boolean) — a browser-development config cannot sign in");
+  }
+  if (config.DEV_SUPER_APP_TOKEN) {
+    bad("config.js sets DEV_SUPER_APP_TOKEN — a developer's token would ship to every phone");
+  } else {
+    ok("config.js carries no DEV_SUPER_APP_TOKEN");
+  }
+}
