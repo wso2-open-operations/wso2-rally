@@ -164,6 +164,21 @@ type JoinInput struct {
 	CallerEmail string
 }
 
+// JoinableVehicle is a car the caller may join: they are on its crew, and its
+// event is published. Deliberately thin — no crew names, emails or phone
+// numbers — because it is read before the caller has joined anything.
+type JoinableVehicle struct {
+	VehicleID string
+	Code      string
+	TeamName  string
+	EventID   string
+	EventName string
+	// EventDate and StartTime are as the organizer entered them: "2006-01-02"
+	// and "HH:MM", on the rally's wall clock.
+	EventDate string
+	StartTime string
+}
+
 // JoinResult is what a phone gets back when it joins.
 type JoinResult struct {
 	Session Session

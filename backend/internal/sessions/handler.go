@@ -40,13 +40,15 @@ func NewHandler(service *Service, logger *slog.Logger) *Handler {
 	return &Handler{service: service, logger: logger}
 }
 
-// RegisterJoin adds the one endpoint that runs before a phone has a *team*
-// token but after the super app has authenticated the person holding it.
+// RegisterJoin adds the endpoints that run before a phone has a *team* token
+// but after the super app has authenticated the person holding it: listing the
+// cars the caller is crew on, and joining one.
 //
-// It is mounted under Auth but outside RequireOrganizer: the caller is a crew
-// member, not staff, so they carry no organizer group. The roster decides
-// whether they may join, not a role.
+// They are mounted under Auth but outside RequireOrganizer: the caller is a
+// crew member, not staff, so they carry no organizer group. The roster decides
+// what they may see and join, not a role.
 func (h *Handler) RegisterJoin(r chi.Router) {
+	r.Get("/sessions/joinable", h.joinable)
 	r.Post("/sessions/join", h.join)
 }
 
@@ -61,6 +63,25 @@ func (h *Handler) RegisterTeam(r chi.Router) {
 	r.Post("/sessions/me/alerts", h.raiseAlert)
 	r.Post("/sessions/me/finish", h.finish)
 	r.Get("/sessions/me/vouchers", h.vouchers)
+}
+
+// joinable lists the cars the caller can join, for the join screen.
+func (h *Handler) joinable(w http.ResponseWriter, r *http.Request) {
+	// The same gate as join: the super app's identity, never a team token. A
+	// phone that has already joined has no use for the list.
+	identity, ok := authz.IdentityFrom(r.Context())
+	if !ok || !identity.IsOrganizer() {
+		httpx.WriteError(w, http.StatusForbidden, httpx.MsgForbidden)
+		return
+	}
+
+	vehicles, err := h.service.JoinableVehicles(r.Context(), identity.Email)
+	if err != nil {
+		httpx.WriteDomainError(w, r, h.logger, err)
+		return
+	}
+
+	httpx.WriteJSON(w, http.StatusOK, toJoinableVehicleDTOs(vehicles))
 }
 
 func (h *Handler) join(w http.ResponseWriter, r *http.Request) {

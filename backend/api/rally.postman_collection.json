@@ -1070,6 +1070,34 @@
       },
       "item": [
         {
+          "name": "Cars I can join",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{organizerToken}}", "type": "string" }]
+            },
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/sessions/joinable", "host": ["{{baseUrl}}"], "path": ["sessions", "joinable"] },
+            "description": "The join screen's list: the cars, in published events, whose crew includes the caller's `email`. Read with the **super app's** token, before any team token exists, so this request overrides the folder's `{{teamToken}}` auth with `{{organizerToken}}` (whose email *Create vehicle* puts on the roster).\n\nFiltered to the caller, not the whole fleet: join refuses anyone not on that car's crew anyway. An empty array means the person is on no crew — usually a mistyped email — and is not an error. No crew names, emails or phone numbers are returned. A team token gets **403**."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const cars = pm.response.json();",
+                  "pm.test('lists the seeded vehicle once its event is published', () => {",
+                  "    pm.expect(cars.map((c) => c.vehicleId)).to.include(pm.collectionVariables.get('vehicleId'));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
           "name": "Join vehicle (mints the team token)",
           "request": {
             "method": "POST",

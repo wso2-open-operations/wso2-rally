@@ -53,9 +53,12 @@ type fakeRepo struct {
 	routeID   string
 	// crew is the vehicle's roster, written the way real numbers are: spaced,
 	// prefixed, inconsistent — because the last-four check has to cope with that.
-	crew        []CrewRosterMember
-	taskStates  []TaskState
-	noVehicle   bool
+	crew       []CrewRosterMember
+	taskStates []TaskState
+	noVehicle  bool
+	// joinable is keyed by normalised email, mirroring the SQL match.
+	joinable    map[string][]JoinableVehicle
+	joinableErr error
 	submittable map[string]SubmittableTask
 	totals      map[string]int
 	// submissions is keyed sessionID -> taskID, mirroring the unique index that

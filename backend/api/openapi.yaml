@@ -853,13 +853,56 @@ paths:
                     items: { $ref: "#/components/schemas/DebriefVideo" }
                   totalCount: { type: integer }
 
+  /sessions/joinable:
+    get:
+      tags: [In-car]
+      summary: The cars the caller can join.
+      description: |
+        Read with the **super app's Asgardeo token**, before the caller has a
+        team token — it is what the join screen shows. Lists the vehicles, in
+        published events, whose crew includes the token's `email` (matched the
+        same case-insensitive way `POST /sessions/join` matches it).
+
+        Filtered to the caller rather than the whole fleet: join refuses anyone
+        not on that car's crew, so other cars would only be wrong answers. An
+        empty array is a valid answer — the person is on no crew, typically
+        because an organizer mistyped their email — not an error.
+
+        Carries no crew names, emails or phone numbers. A team token is
+        refused (403): a phone that has joined has no use for the list.
+      responses:
+        "200":
+          description: The cars the caller is crew on, possibly none.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    vehicleId: { type: string }
+                    code: { type: string, example: PKT-001 }
+                    teamName: { type: string }
+                    eventId: { type: string }
+                    eventName: { type: string }
+                    eventDate: { type: string, format: date, example: "2027-02-13" }
+                    startTime: { type: string, example: "09:00", description: Wall-clock start as entered. }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403":
+          description: Called with a team token.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
   /sessions/join:
     post:
       tags: [In-car]
       summary: Join a vehicle's run and receive a team token.
       description: |
-        The one endpoint that takes an **organizer-issued Asgardeo token** and
-        returns a **team token**. Everything else under `/sessions/me/*` takes
+        Takes an **organizer-issued Asgardeo token** and returns a **team
+        token** — with `GET /sessions/joinable`, one of the two endpoints that
+        read the super app's token. Everything else under `/sessions/me/*` takes
         the team token.
 
         The in-car app is embedded in the WSO2 Open Super App, so the phone

@@ -95,6 +95,17 @@ type DeviceDTO struct {
 	Sharing bool `json:"sharing"`
 }
 
+// JoinableVehicleDTO is one car the caller can join, as GET /sessions/joinable sends it.
+type JoinableVehicleDTO struct {
+	VehicleID string `json:"vehicleId"`
+	Code      string `json:"code"`
+	TeamName  string `json:"teamName"`
+	EventID   string `json:"eventId"`
+	EventName string `json:"eventName"`
+	EventDate string `json:"eventDate"`
+	StartTime string `json:"startTime"`
+}
+
 // JoinResponse hands the phone its credential for the rest of the rally.
 type JoinResponse struct {
 	TeamToken string     `json:"teamToken"`
@@ -252,6 +263,20 @@ func toStateDTO(state SessionState, now time.Time) SessionStateDTO {
 		You:            toDeviceDTO(state.You, now),
 		SharingCount:   sharingCount(crew),
 	}
+}
+
+// toJoinableVehicleDTOs never returns nil, so an empty answer is `[]` on the
+// wire rather than `null`.
+func toJoinableVehicleDTOs(list []JoinableVehicle) []JoinableVehicleDTO {
+	out := make([]JoinableVehicleDTO, 0, len(list))
+	for _, v := range list {
+		out = append(out, JoinableVehicleDTO{
+			VehicleID: v.VehicleID, Code: v.Code, TeamName: v.TeamName,
+			EventID: v.EventID, EventName: v.EventName, EventDate: v.EventDate, StartTime: v.StartTime,
+		})
+	}
+
+	return out
 }
 
 func toJoinResponse(result JoinResult, now time.Time) JoinResponse {

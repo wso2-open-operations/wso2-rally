@@ -62,6 +62,44 @@ func (r *sqlRepo) JoinTargetOf(ctx context.Context, vehicleID string) (JoinTarge
 	return target, nil
 }
 
+// JoinableVehiclesOf lists the cars in published events whose crew includes
+// email. Emails are stored normalised (see vehicles.normalizeCrewEmail), so the
+// match is a byte comparison — the same one join makes in Go. It has to say so:
+// the column's default collation also folds accents, and would offer jose@ a
+// car only josé@ can join. The date is formatted in SQL so it reads exactly as
+// entered, with no driver time-zone shift.
+func (r *sqlRepo) JoinableVehiclesOf(ctx context.Context, email string) ([]JoinableVehicle, error) {
+	const query = `
+		SELECT v.id, v.code, v.team_name, e.id, e.name,
+		       DATE_FORMAT(e.event_date, '%Y-%m-%d'), e.start_time
+		FROM crew_member c
+		JOIN vehicle v ON v.id = c.vehicle_id
+		JOIN event e ON e.id = v.event_id
+		WHERE c.email = ? COLLATE utf8mb4_bin AND e.status = 'active'
+		ORDER BY e.event_date, e.name, v.code`
+
+	rows, err := r.db.QueryContext(ctx, query, email)
+	if err != nil {
+		return nil, fmt.Errorf("select joinable vehicles: %w", err)
+	}
+	defer rows.Close()
+
+	vehicles := []JoinableVehicle{}
+	for rows.Next() {
+		var v JoinableVehicle
+		if err := rows.Scan(&v.VehicleID, &v.Code, &v.TeamName, &v.EventID, &v.EventName,
+			&v.EventDate, &v.StartTime); err != nil {
+			return nil, fmt.Errorf("scan joinable vehicle: %w", err)
+		}
+		vehicles = append(vehicles, v)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate joinable vehicles: %w", err)
+	}
+
+	return vehicles, nil
+}
+
 func (r *sqlRepo) crewRosterOf(ctx context.Context, vehicleID string) ([]CrewRosterMember, error) {
 	const query = `
 		SELECT id, name, email, phone_number, role

@@ -530,3 +530,55 @@ func csvUpload(t *testing.T, content string) (io.Reader, string) {
 
 	return &body, writer.FormDataContentType()
 }
+
+// Before joining, a crew member holds only the super app's token. This is the
+// one list they can read with it, and it shows only the cars they are crew on.
+func TestCrewSeesOnlyTheCarsTheyAreOn(t *testing.T) {
+	r := newRally(t)
+
+	event := decode[idResponse](t, r.asOrganizer(http.MethodPost, "/events", `{
+		"name": "Rally", "eventDate": "2027-02-13", "startTime": "09:00",
+		"start": {"lat":6.8901,"lng":79.92,"radiusM":40},
+		"end": {"lat":6.848,"lng":79.928,"radiusM":30}
+	}`), http.StatusCreated)
+	mine := decode[idResponse](t, r.asOrganizer(http.MethodPost, "/events/"+event.ID+"/vehicles",
+		`{"code":"PKT-101","teamName":"Mine","crew":[{"name":"Nimal","email":"nimal@wso2.com","phoneNumber":"0771234567"}]}`),
+		http.StatusCreated)
+	decode[idResponse](t, r.asOrganizer(http.MethodPost, "/events/"+event.ID+"/vehicles",
+		`{"code":"PKT-102","teamName":"Theirs","crew":[{"name":"Other","email":"other@wso2.com","phoneNumber":"0771234568"}]}`),
+		http.StatusCreated)
+
+	// Not published yet: nothing to join.
+	before := decode[[]map[string]any](t,
+		r.asCrewMember(http.MethodGet, "/sessions/joinable", "", "nimal@wso2.com"), http.StatusOK)
+	require.Empty(t, before)
+
+	r.asOrganizer(http.MethodPost, "/events/"+event.ID+"/publish", "")
+
+	got := decode[[]struct {
+		VehicleID string `json:"vehicleId"`
+		Code      string `json:"code"`
+		TeamName  string `json:"teamName"`
+		EventName string `json:"eventName"`
+	}](t, r.asCrewMember(http.MethodGet, "/sessions/joinable", "", "Nimal@WSO2.com"), http.StatusOK)
+
+	require.Len(t, got, 1)
+	require.Equal(t, mine.ID, got[0].VehicleID)
+	require.Equal(t, "PKT-101", got[0].Code)
+	require.Equal(t, "Rally", got[0].EventName)
+
+	stranger := decode[[]map[string]any](t,
+		r.asCrewMember(http.MethodGet, "/sessions/joinable", "", "stranger@wso2.com"), http.StatusOK)
+	require.Empty(t, stranger, "a person on no crew sees no cars, not everyone's")
+
+	require.Equal(t, http.StatusUnauthorized, r.do(http.MethodGet, "/sessions/joinable", "", "").Code)
+
+	// A phone that has joined carries a team token, which is not an identity
+	// this list answers to.
+	joined := decode[struct {
+		TeamToken string `json:"teamToken"`
+	}](t, r.asCrewMember(http.MethodPost, "/sessions/join", `{"vehicleId":"`+mine.ID+`"}`, "nimal@wso2.com"),
+		http.StatusCreated)
+	r.teamToken = joined.TeamToken
+	require.Equal(t, http.StatusForbidden, r.asCrew(http.MethodGet, "/sessions/joinable", "").Code)
+}

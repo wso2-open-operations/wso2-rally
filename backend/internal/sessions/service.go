@@ -42,6 +42,9 @@ type Repo interface {
 	// JoinTargetOf returns what is needed to join a vehicle, or
 	// ErrVehicleNotFound.
 	JoinTargetOf(ctx context.Context, vehicleID string) (JoinTarget, error)
+	// JoinableVehiclesOf lists the cars, in published events, whose crew
+	// includes this normalised email.
+	JoinableVehiclesOf(ctx context.Context, email string) ([]JoinableVehicle, error)
 	// CreateSession inserts a session, returning ErrAlreadyBound when the
 	// vehicle already has a live one.
 	CreateSession(ctx context.Context, s Session) error
@@ -263,6 +266,31 @@ func memberOf(roster []CrewRosterMember, callerEmail string) (CrewRosterMember, 
 	}
 
 	return CrewRosterMember{}, ErrNotOnRoster
+}
+
+// JoinableVehicles lists the cars the caller can join: those in published
+// events whose crew includes the caller's email.
+//
+// It answers the join screen's one question — which car are you in? — before
+// the caller has a team token, so it is read with the super app's token. It
+// is filtered to the caller rather than listing the event's whole fleet: join
+// refuses anyone not on that car's crew anyway, so the rest of the fleet would
+// only offer wrong answers, and showing every team to every super-app user
+// tells them nothing they need. An empty list is an answer, not an error — it
+// is how a crew member finds out an organizer typo'd their email.
+func (s *Service) JoinableVehicles(ctx context.Context, callerEmail string) ([]JoinableVehicle, error) {
+	email := normalizeEmail(callerEmail)
+	if email == "" {
+		return nil, apperr.Validationf(
+			"your account has no email address, so we cannot find you on a crew list")
+	}
+
+	vehicles, err := s.repo.JoinableVehiclesOf(ctx, email)
+	if err != nil {
+		return nil, fmt.Errorf("list joinable vehicles: %w", err)
+	}
+
+	return vehicles, nil
 }
 
 // normalizeEmail lowercases and trims an address so two spellings of the same
