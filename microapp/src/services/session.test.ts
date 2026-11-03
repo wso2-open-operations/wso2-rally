@@ -159,6 +159,43 @@ describe("getState", () => {
   });
 });
 
+describe("getTasks", () => {
+  const taskDTO = (taskId: string, status: string, completedBy = "") => ({
+    taskId,
+    waypointId: "wp-1",
+    code: taskId.toUpperCase(),
+    title: `Task ${taskId}`,
+    type: "BARCODE_SCAN",
+    points: 50,
+    status,
+    awardedPoints: status === "completed" ? 50 : 0,
+    completedBy,
+  });
+
+  it("lists the route's tasks with where the car stands on each", async () => {
+    apiClient.defaults.adapter = replyWith([taskDTO("t1", "completed", "Nimal Perera"), taskDTO("t2", "pending")]);
+
+    const got = await sessionService.getTasks();
+
+    expect(sent[0].url).toBe("/sessions/me/tasks");
+    expect(got).toHaveLength(2);
+    expect(got[0]).toMatchObject({ id: "t1", waypointId: "wp-1", code: "T1", status: "completed", awardedPoints: 50 });
+    expect(got[0].completedBy).toBe("Nimal Perera");
+    expect(got[1].completedBy).toBeNull();
+  });
+
+  // Go encodes an empty slice it never appended to as null.
+  it("reads a null list as no tasks", async () => {
+    apiClient.defaults.adapter = replyWith(null);
+
+    expect(await sessionService.getTasks()).toEqual([]);
+  });
+
+  it("is exposed as TanStack query options under the session key", () => {
+    expect(sessionService.session.tasks().queryKey).toEqual(["session", "tasks"]);
+  });
+});
+
 describe("ping", () => {
   const pingResponse = { unlockedTaskIds: ["t1"], currentWaypointId: "", arrived: false, events: [] };
 

@@ -133,6 +133,21 @@ export interface PingResponseDTO {
   events: PingEventDTO[];
 }
 
+/** One item of `GET /sessions/me/tasks`: a task on the car's route and where the car stands on it. */
+export interface TaskStateDTO {
+  taskId: string;
+  waypointId: string;
+  code: string;
+  title: string;
+  type: string;
+  points: number;
+  /** "pending" until a crew member settles it. */
+  status: "pending" | "completed" | "skipped";
+  awardedPoints: number;
+  /** The teammate who settled it; empty while it is pending. */
+  completedBy: string;
+}
+
 export interface SubmitResultDTO {
   correct: boolean;
   awardedPoints: number;

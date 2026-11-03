@@ -22,6 +22,7 @@ import {
   SESSIONS_JOIN,
   SESSIONS_LOCATION,
   SESSIONS_ME,
+  SESSIONS_TASKS,
   SESSIONS_VOUCHERS,
   SUBMIT,
 } from "@config/endpoints";
@@ -41,6 +42,7 @@ import type {
   SessionDTO,
   SessionStateDTO,
   SubmitResultDTO,
+  TaskStateDTO,
   VoucherDTO,
   WaypointDTO,
 } from "@/types/session.dto";
@@ -55,6 +57,7 @@ import type {
   SessionModel,
   SessionState,
   SubmitResult,
+  TaskSummary,
   Voucher,
   Waypoint,
 } from "@/types/session.model";
@@ -133,6 +136,18 @@ export const toPingResult = (dto: PingResponseDTO): PingResult => ({
     waypointId: toIdOrNull(event.waypointId),
     taskId: toIdOrNull(event.taskId),
   })),
+});
+
+export const toTaskSummary = (dto: TaskStateDTO): TaskSummary => ({
+  id: dto.taskId,
+  waypointId: dto.waypointId,
+  code: dto.code,
+  title: dto.title,
+  type: dto.type,
+  points: dto.points,
+  status: dto.status,
+  awardedPoints: dto.awardedPoints,
+  completedBy: toIdOrNull(dto.completedBy),
 });
 
 const toCrewAlert = (dto: AlertDTO): CrewAlert => ({
@@ -226,6 +241,13 @@ export async function getState(): Promise<SessionState> {
   return state;
 }
 
+/** Every task on the car's route, in course order, with where the car stands on each. */
+export async function getTasks(): Promise<TaskSummary[]> {
+  const { data } = await apiClient.get<TaskStateDTO[] | null>(SESSIONS_TASKS);
+
+  return (data ?? []).map(toTaskSummary);
+}
+
 /**
  * Reports a position and returns what it unlocked.
  *
@@ -287,11 +309,13 @@ export async function raiseAlert(input: CrewAlertInput): Promise<CrewAlert> {
 export const sessionKeys = {
   all: ["session"] as const,
   state: () => [...sessionKeys.all, "state"] as const,
+  tasks: () => [...sessionKeys.all, "tasks"] as const,
   vouchers: () => [...sessionKeys.all, "vouchers"] as const,
 };
 
 export const session = {
   state: () => queryOptions({ queryKey: sessionKeys.state(), queryFn: getState }),
+  tasks: () => queryOptions({ queryKey: sessionKeys.tasks(), queryFn: getTasks }),
   vouchers: () => queryOptions({ queryKey: sessionKeys.vouchers(), queryFn: getVouchers }),
   join: () => mutationOptions({ mutationFn: (vehicleId: string) => join(vehicleId) }),
   submit: () =>

@@ -22,6 +22,7 @@ import SessionLayout from "@components/layout/SessionLayout";
 import CountdownPage from "@pages/CountdownPage";
 import GeofenceLockPage from "@pages/GeofenceLockPage";
 import InitPage from "@pages/InitPage";
+import RoutePage from "@pages/RoutePage";
 
 /**
  * The B1–B10 screens land here as MA-4 onwards fill them in; the rest are
@@ -58,7 +59,7 @@ export default function App(): JSX.Element {
           <Route element={<SessionLayout />}>
             <Route path="/lock" element={<GeofenceLockPage />} />
             <Route path="/countdown" element={<CountdownPage />} />
-            <Route path="/route" element={<Placeholder screen="B4" title="Next leg" />} />
+            <Route path="/route" element={<RoutePage />} />
             <Route path="/task/:taskId" element={<Placeholder screen="B7" title="Task" />} />
             <Route path="/rest" element={<Placeholder screen="B8" title="Mandatory rest" />} />
             <Route path="/arrival" element={<Placeholder screen="B9" title="Pearl Bay" />} />

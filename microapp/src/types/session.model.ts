@@ -20,7 +20,7 @@
  * `services/session.ts`.
  */
 
-import type { CrewAlertTypeDTO, SessionStatusDTO } from "@/types/session.dto";
+import type { CrewAlertTypeDTO, SessionStatusDTO, TaskStateDTO } from "@/types/session.dto";
 
 export type SessionStatus = SessionStatusDTO;
 
@@ -112,6 +112,22 @@ export interface PingResult {
   currentWaypointId: string | null;
   arrived: boolean;
   events: PingEvent[];
+}
+
+export type TaskStatus = TaskStateDTO["status"];
+
+/** A task on the car's route, as far as the crew has got with it. */
+export interface TaskSummary {
+  id: string;
+  waypointId: string;
+  code: string;
+  title: string;
+  type: string;
+  points: number;
+  status: TaskStatus;
+  awardedPoints: number;
+  /** Null while nobody has settled it. */
+  completedBy: string | null;
 }
 
 /** A position to report. `takenAt` is required for a buffered fix and omitted for a live one. */
