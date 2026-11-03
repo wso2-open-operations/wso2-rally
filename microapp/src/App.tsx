@@ -18,6 +18,7 @@ import { Box, Typography } from "@mui/material";
 import { HashRouter, Navigate, Route, Routes } from "react-router-dom";
 import type { JSX } from "react";
 import RequireSession from "@components/layout/RequireSession";
+import GeofenceLockPage from "@pages/GeofenceLockPage";
 import InitPage from "@pages/InitPage";
 
 /**
@@ -51,7 +52,7 @@ export default function App(): JSX.Element {
       <Routes>
         <Route path="/" element={<InitPage />} />
         <Route element={<RequireSession />}>
-          <Route path="/lock" element={<Placeholder screen="B2" title="Start grid" />} />
+          <Route path="/lock" element={<GeofenceLockPage />} />
           <Route path="/countdown" element={<Placeholder screen="B3" title="09:00 sync" />} />
           <Route path="/route" element={<Placeholder screen="B4" title="Next leg" />} />
           <Route path="/task/:taskId" element={<Placeholder screen="B7" title="Task" />} />
