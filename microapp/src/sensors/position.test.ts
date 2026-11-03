@@ -198,6 +198,68 @@ describe("bridgePositionSource", () => {
     stopFirst();
     stopSecond();
   });
+
+  // A host that throws on the request has refused it, the same as one that
+  // rejects: the watcher hears why, and the next watch asks again.
+  it("treats a request the host throws on as a refusal", () => {
+    const { bridge } = embedLocation();
+    bridge.requestLocationUpdates = vi.fn(() => {
+      throw new Error("bridge is gone");
+    });
+    const onError = vi.fn();
+
+    let stop = () => {};
+    expect(() => (stop = bridgePositionSource.watch(vi.fn(), onError))).not.toThrow();
+    stop();
+    bridgePositionSource.watch(vi.fn())();
+
+    expect(onError).toHaveBeenCalledWith("unavailable");
+    expect(bridge.requestLocationUpdates).toHaveBeenCalledTimes(2);
+  });
+
+  // The host sends a fix only after 10 m of movement, so a screen that starts
+  // watching while the car is parked would hear nothing at all.
+  it("hands the newest fix to a watcher that joins an open stream", () => {
+    const { bridge, fix } = embedLocation();
+    const stopFirst = bridgePositionSource.watch(vi.fn());
+    fix({ lat: 6.8, lng: 79.8, accuracy: 9, ts: "2027-02-13T03:59:00Z" });
+    fix({ lat: 6.9, lng: 79.9, accuracy: 6, ts: "2027-02-13T04:00:00Z" });
+    const late: Position[] = [];
+
+    const stopLate = bridgePositionSource.watch((p) => late.push(p));
+
+    expect(late).toEqual([{ lat: 6.9, lng: 79.9, accuracy: 6, buffered: false }]);
+    expect(bridge.requestLocationUpdates).toHaveBeenCalledOnce();
+    stopFirst();
+    stopLate();
+  });
+
+  // Once the stream closes the car may have gone anywhere: a fix from before
+  // is not where it is now.
+  it("forgets the last fix when the stream closes", () => {
+    const { fix } = embedLocation();
+    const stop = bridgePositionSource.watch(vi.fn());
+    fix({ lat: 6.9, lng: 79.9, accuracy: 6, ts: "2027-02-13T04:00:00Z" });
+    stop();
+    const later: Position[] = [];
+
+    bridgePositionSource.watch((p) => later.push(p))();
+
+    expect(later).toEqual([]);
+  });
+
+  it("forgets the last fix when the host refuses the stream", () => {
+    const { fix, reject } = embedLocation();
+    const stop = bridgePositionSource.watch(vi.fn(), vi.fn());
+    fix({ lat: 6.9, lng: 79.9, accuracy: 6, ts: "2027-02-13T04:00:00Z" });
+    reject("services_disabled");
+    stop();
+    const later: Position[] = [];
+
+    bridgePositionSource.watch((p) => later.push(p))();
+
+    expect(later).toEqual([]);
+  });
 });
 
 describe("positionSource", () => {
@@ -226,6 +288,18 @@ describe("getCurrent", () => {
 
     await expect(current).resolves.toMatchObject({ lat: 6.9, lng: 79.9 });
     expect(bridge.requestStopLocationUpdates).toHaveBeenCalledOnce();
+  });
+
+  // The breakdown alert asks for a position while the map screen already holds
+  // the stream open. A parked car sends no new fix, so without the last one
+  // this ran out the clock and told the crew to look for a clearer sky.
+  it("answers from a stream another screen holds open, without the car moving", async () => {
+    const { fix } = embedLocation();
+    const stop = bridgePositionSource.watch(vi.fn());
+    fix({ lat: 6.9, lng: 79.9, accuracy: 6, ts: "2027-02-13T04:00:00Z" });
+
+    await expect(getCurrent(50)).resolves.toMatchObject({ lat: 6.9, lng: 79.9 });
+    stop();
   });
 
   it("rejects with the reason when location is refused", async () => {

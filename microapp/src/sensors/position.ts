@@ -118,6 +118,13 @@ interface Watcher {
 
 const watchers = new Set<Watcher>();
 let stopHostStream: (() => void) | null = null;
+/**
+ * The newest fix of the open stream. The host sends one only after 10 m of
+ * movement, so a watcher that joins while the car is parked would hear nothing
+ * until it moves. Dropped when the stream closes: after that the car may be
+ * anywhere.
+ */
+let lastFix: LocationFix | null = null;
 
 /**
  * The host keeps a single location stream per micro app, and starting a second
@@ -136,11 +143,15 @@ export const bridgePositionSource: PositionSource = {
       let refused = false;
       const stop = subscribeLocation(
         STREAM_OPTIONS,
-        (fix) => watchers.forEach((w) => w.onPosition(fromFix(fix))),
+        (fix) => {
+          lastFix = fix;
+          watchers.forEach((w) => w.onPosition(fromFix(fix)));
+        },
         (reason) => {
           // A refused stream is gone. Forget it, so the next watch asks again —
           // after the crew has, say, allowed location in settings.
           refused = true;
+          lastFix = null;
           stopHostStream?.();
           stopHostStream = null;
           watchers.forEach((w) => w.onError?.(asFailure(reason)));
@@ -151,6 +162,8 @@ export const bridgePositionSource: PositionSource = {
       } else {
         stopHostStream = stop;
       }
+    } else if (lastFix) {
+      onPosition(fromFix(lastFix));
     }
 
     return () => {
@@ -158,6 +171,7 @@ export const bridgePositionSource: PositionSource = {
       if (watchers.size === 0 && stopHostStream) {
         stopHostStream();
         stopHostStream = null;
+        lastFix = null;
       }
     };
   },

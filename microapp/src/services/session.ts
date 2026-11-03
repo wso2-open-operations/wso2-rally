@@ -209,8 +209,10 @@ export async function submit(taskId: string, payload: unknown): Promise<SubmitRe
 /** Ends the run by hand. Arriving inside the finish geofence ends it on its own. */
 export async function finish(): Promise<SessionModel> {
   const { data } = await apiClient.post<SessionDTO>(SESSIONS_FINISH);
+  const session = toSession(data);
+  useSessionStore.getState().setSession(session);
 
-  return toSession(data);
+  return session;
 }
 
 export async function getVouchers(): Promise<Voucher> {

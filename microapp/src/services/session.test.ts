@@ -204,6 +204,17 @@ describe("the rest of the in-car surface", () => {
     expect(session.finishedAt).toEqual(new Date("2027-02-13T08:00:00Z"));
   });
 
+  // join() and getState() keep the store current; finish() must too, or the
+  // gate and the app bar read "active" until the next state fetch.
+  it("records the finished run in the session store", async () => {
+    useSessionStore.getState().setJoined("team-tok", sessionService.toSession(sessionDTO));
+    apiClient.defaults.adapter = replyWith({ ...sessionDTO, status: "finished", finishedAt: "2027-02-13T08:00:00Z" });
+
+    await sessionService.finish();
+
+    expect(useSessionStore.getState().session?.status).toBe("finished");
+  });
+
   it("reads the vouchers", async () => {
     apiClient.defaults.adapter = replyWith({ entryCode: "A1B2C3", lockerId: "L-07", lunchPasses: 4 });
 

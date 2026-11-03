@@ -362,7 +362,14 @@ export function subscribeLocation(
     if (active) onError(describe(reason, "unavailable"));
   }) as never;
 
-  (start as (o: LocationRequestOptions) => unknown)(options);
+  // A host call that throws is a refusal like any other. Left to escape, it
+  // would skip onError and leave the caller waiting on a stream never opened.
+  try {
+    (start as (o: LocationRequestOptions) => unknown)(options);
+  } catch (error) {
+    active = false;
+    onError(describe(error, "unavailable"));
+  }
 
   return () => {
     if (!active) return;

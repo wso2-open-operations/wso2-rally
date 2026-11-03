@@ -244,4 +244,26 @@ describe("subscribeLocation", () => {
 
     expect(onError).toHaveBeenCalledWith("not_declared");
   });
+
+  // send() reports a host call that throws; the subscription has to as well,
+  // or the caller waits on a stream that never opened.
+  it("reports a request the host throws on, and stays closed", () => {
+    const requestStopLocationUpdates = vi.fn();
+    host({
+      requestLocationUpdates: () => {
+        throw new Error("bridge is gone");
+      },
+      requestStopLocationUpdates,
+    });
+    const onFix = vi.fn();
+    const onError = vi.fn();
+
+    const stop = subscribeLocation({}, onFix, onError);
+    answer("resolveLocationUpdate", { lat: 1, lng: 2, accuracy: 5, ts: "2027-02-13T09:00:00Z" });
+    stop();
+
+    expect(onError).toHaveBeenCalledExactlyOnceWith("bridge is gone");
+    expect(onFix).not.toHaveBeenCalled();
+    expect(requestStopLocationUpdates).not.toHaveBeenCalled();
+  });
 });
