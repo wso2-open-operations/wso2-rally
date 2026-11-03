@@ -18,6 +18,8 @@ import { Box, Typography } from "@mui/material";
 import { HashRouter, Navigate, Route, Routes } from "react-router-dom";
 import type { JSX } from "react";
 import RequireSession from "@components/layout/RequireSession";
+import SessionLayout from "@components/layout/SessionLayout";
+import CountdownPage from "@pages/CountdownPage";
 import GeofenceLockPage from "@pages/GeofenceLockPage";
 import InitPage from "@pages/InitPage";
 
@@ -27,7 +29,8 @@ import InitPage from "@pages/InitPage";
  *
  * B1 is the only screen open to a phone that has not joined. Everything else
  * sits behind `RequireSession`, which restores a stored session after a reload
- * before deciding, and otherwise sends the phone to B1.
+ * before deciding, and otherwise sends the phone to B1 — and inside
+ * `SessionLayout`, which holds the phone's one session socket for all of them.
  *
  * `HashRouter`, not `BrowserRouter`: the super app serves this from the
  * filesystem, and history routing needs a server to rewrite unknown paths.
@@ -52,13 +55,15 @@ export default function App(): JSX.Element {
       <Routes>
         <Route path="/" element={<InitPage />} />
         <Route element={<RequireSession />}>
-          <Route path="/lock" element={<GeofenceLockPage />} />
-          <Route path="/countdown" element={<Placeholder screen="B3" title="09:00 sync" />} />
-          <Route path="/route" element={<Placeholder screen="B4" title="Next leg" />} />
-          <Route path="/task/:taskId" element={<Placeholder screen="B7" title="Task" />} />
-          <Route path="/rest" element={<Placeholder screen="B8" title="Mandatory rest" />} />
-          <Route path="/arrival" element={<Placeholder screen="B9" title="Pearl Bay" />} />
-          <Route path="/report" element={<Placeholder screen="B10" title="Report an issue" />} />
+          <Route element={<SessionLayout />}>
+            <Route path="/lock" element={<GeofenceLockPage />} />
+            <Route path="/countdown" element={<CountdownPage />} />
+            <Route path="/route" element={<Placeholder screen="B4" title="Next leg" />} />
+            <Route path="/task/:taskId" element={<Placeholder screen="B7" title="Task" />} />
+            <Route path="/rest" element={<Placeholder screen="B8" title="Mandatory rest" />} />
+            <Route path="/arrival" element={<Placeholder screen="B9" title="Pearl Bay" />} />
+            <Route path="/report" element={<Placeholder screen="B10" title="Report an issue" />} />
+          </Route>
         </Route>
         {/* No 404 screen: a crew cannot type a URL, so an unknown hash is our
             own bug and the least-worst landing is the start of the flow. */}
