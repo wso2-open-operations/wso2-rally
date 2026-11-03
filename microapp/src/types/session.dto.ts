@@ -86,6 +86,19 @@ export interface SessionStateDTO {
   coverageLost: boolean;
 }
 
+/** One item of `GET /sessions/joinable`: a car the caller is crew on, in a published event. */
+export interface JoinableVehicleDTO {
+  vehicleId: string;
+  code: string;
+  teamName: string;
+  eventId: string;
+  eventName: string;
+  /** "2006-01-02", as the organizer entered it. */
+  eventDate: string;
+  /** "HH:MM" on the rally's wall clock. */
+  startTime: string;
+}
+
 /** `POST /sessions/join` body. The caller's identity comes from the token, never the body. */
 export interface JoinRequestDTO {
   vehicleId: string;

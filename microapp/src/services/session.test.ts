@@ -242,3 +242,81 @@ describe("the rest of the in-car surface", () => {
     expect(alert.raisedAt).toEqual(new Date("2027-02-13T05:00:00Z"));
   });
 });
+
+describe("restoreSession", () => {
+  // A reload, a crash, a phone reboot: the team token survives in storage and
+  // the crew picks up where they were instead of re-joining.
+  it("puts a stored team token back and fetches the session", async () => {
+    await teamTokenStorage.save("stored-team-tok");
+    apiClient.defaults.adapter = replyWith({
+      session: sessionDTO,
+      vehicleCode: "PKT-001",
+      teamName: "Data Dashers",
+      eventStatus: "active",
+      startTime: "09:00",
+      startsAt: null,
+      cipher: "",
+      startCircle: { lat: 0, lng: 0, radiusM: 40, placed: true },
+      finishCircle: { lat: 0, lng: 0, radiusM: 30, placed: true },
+      waypoints: [],
+      nextWaypointId: "",
+      crew: [device],
+      you: device,
+      sharingCount: 1,
+      coverageLost: false,
+    });
+
+    await sessionService.restoreSession();
+
+    expect(useSessionStore.getState().token).toBe("stored-team-tok");
+    expect(useSessionStore.getState().session?.id).toBe("s1");
+    expect(sent[0].headers.Authorization).toBe("Bearer stored-team-tok");
+  });
+
+  it("does nothing when nothing is stored", async () => {
+    apiClient.defaults.adapter = replyWith({});
+
+    await sessionService.restoreSession();
+
+    expect(useSessionStore.getState().token).toBeNull();
+    expect(sent).toHaveLength(0);
+  });
+
+  it("does nothing when a session is already in memory", async () => {
+    useSessionStore.getState().setToken("live-tok");
+    apiClient.defaults.adapter = replyWith({});
+
+    await sessionService.restoreSession();
+
+    expect(sent).toHaveLength(0);
+  });
+
+  // No signal at the start line is not a reason to forget the crew's token:
+  // the next call will try again.
+  it("keeps the token when the backend cannot be reached", async () => {
+    await teamTokenStorage.save("stored-team-tok");
+    apiClient.defaults.adapter = async (config) => {
+      const { AxiosError } = await import("axios");
+      throw new AxiosError("Network Error", "ERR_NETWORK", config);
+    };
+
+    await sessionService.restoreSession();
+
+    expect(useSessionStore.getState().token).toBe("stored-team-tok");
+  });
+
+  // A token the backend refuses is gone for good — the apiClient's 401
+  // handling clears it, so the crew is sent to join.
+  it("forgets a token the backend refuses", async () => {
+    await teamTokenStorage.save("expired-tok");
+    apiClient.defaults.adapter = async (config) => {
+      const { AxiosError } = await import("axios");
+      const response = { data: { message: "expired" }, status: 401, statusText: "", headers: {}, config };
+      throw new AxiosError("401", "ERR_BAD_REQUEST", config, null, response);
+    };
+
+    await sessionService.restoreSession();
+
+    expect(useSessionStore.getState().token).toBeNull();
+  });
+});

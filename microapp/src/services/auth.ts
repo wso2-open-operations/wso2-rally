@@ -47,3 +47,28 @@ export async function getSuperAppToken(): Promise<string> {
 
   return devToken;
 }
+
+/**
+ * The `email` claim of a JWT, to show who is signed in — or null when the token
+ * has none or cannot be read.
+ *
+ * Display only. Nothing is decided from it and the signature is not checked:
+ * the backend verifies the token and makes every decision about who the caller
+ * is. The payload is base64url-encoded UTF-8, so it is decoded as bytes rather
+ * than with a bare `atob`, which would mangle any name outside ASCII.
+ */
+export function emailFromToken(token: string): string | null {
+  const payload = token.split(".")[1];
+  if (!payload) return null;
+
+  try {
+    const base64 = payload.replace(/-/g, "+").replace(/_/g, "/");
+    const binary = atob(base64.padEnd(base64.length + ((4 - (base64.length % 4)) % 4), "="));
+    const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));
+    const claims = JSON.parse(new TextDecoder().decode(bytes)) as { email?: unknown };
+
+    return typeof claims.email === "string" && claims.email !== "" ? claims.email : null;
+  } catch {
+    return null;
+  }
+}

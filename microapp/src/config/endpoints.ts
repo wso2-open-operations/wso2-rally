@@ -94,6 +94,7 @@ export const IS_MICROAPP = window.config?.IS_MICROAPP === true;
 
 // Participant surface. Every /sessions/me/* path takes the team token; join is
 // the one that trades the super app's Asgardeo token for it.
+export const SESSIONS_JOINABLE = "/sessions/joinable";
 export const SESSIONS_JOIN = "/sessions/join";
 export const SESSIONS_ME = "/sessions/me";
 export const SESSIONS_LOCATION = "/sessions/me/location";

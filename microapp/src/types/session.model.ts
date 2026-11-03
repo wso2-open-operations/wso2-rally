@@ -83,6 +83,17 @@ export interface SessionState {
   coverageLost: boolean;
 }
 
+/** A car the signed-in person can join. Dates stay as entered: they are shown, not computed with. */
+export interface JoinableVehicle {
+  vehicleId: string;
+  code: string;
+  teamName: string;
+  eventId: string;
+  eventName: string;
+  eventDate: string;
+  startTime: string;
+}
+
 export interface JoinResult {
   token: string;
   session: SessionModel;

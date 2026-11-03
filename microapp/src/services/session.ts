@@ -168,6 +168,55 @@ export async function join(vehicleId: string): Promise<JoinResult> {
   return { token: data.teamToken, session, device: toDevice(data.device), crew: (data.crew ?? []).map(toDevice) };
 }
 
+/** The restore in flight, so two screens mounting at once share one. */
+let restoring: Promise<void> | null = null;
+
+/**
+ * Picks a run back up after a reload, a crash or a reboot: puts the stored team
+ * token back in the store and fetches the session it belongs to.
+ *
+ * Safe to call from every guarded screen — it does nothing when a token is
+ * already in memory, and concurrent calls share one restore.
+ *
+ * - **Nothing stored** — nothing to do; the crew joins.
+ * - **The backend refuses the token** — the apiClient's 401 handling has
+ *   already cleared it, so the crew joins again.
+ * - **The backend cannot be reached** — the token is kept. No signal at the
+ *   start line is not a reason to forget who this phone is; the next call
+ *   tries again.
+ * - **Storage cannot be read** — logged, and the crew re-joins, which is safe:
+ *   joining lands a phone back on its own device row.
+ */
+export function restoreSession(): Promise<void> {
+  if (useSessionStore.getState().token) {
+    return Promise.resolve();
+  }
+
+  restoring ??= (async () => {
+    let token: string | null;
+    try {
+      token = await teamTokenStorage.load();
+    } catch (error) {
+      console.error("Could not read the stored team token; the crew will join again", error);
+      return;
+    }
+    if (!token) return;
+
+    useSessionStore.getState().setToken(token);
+    try {
+      await getState();
+    } catch (error) {
+      // A 401 has already cleared the token; anything else leaves it for the
+      // next call to try with.
+      console.error("Could not refresh the restored session", error);
+    }
+  })().finally(() => {
+    restoring = null;
+  });
+
+  return restoring;
+}
+
 /** Everything the current screen needs: the run, the course, the crew, the start. */
 export async function getState(): Promise<SessionState> {
   const { data } = await apiClient.get<SessionStateDTO>(SESSIONS_ME);

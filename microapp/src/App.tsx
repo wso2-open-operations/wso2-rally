@@ -17,11 +17,16 @@
 import { Box, Typography } from "@mui/material";
 import { HashRouter, Navigate, Route, Routes } from "react-router-dom";
 import type { JSX } from "react";
+import RequireSession from "@components/layout/RequireSession";
+import InitPage from "@pages/InitPage";
 
 /**
- * The B1–B10 screens land here as MA-4 onwards fill them in. Until then the
- * shell proves the one thing MA-1 is responsible for: that hash routing works
- * from a `file://` origin.
+ * The B1–B10 screens land here as MA-4 onwards fill them in; the rest are
+ * placeholders until their task builds them.
+ *
+ * B1 is the only screen open to a phone that has not joined. Everything else
+ * sits behind `RequireSession`, which restores a stored session after a reload
+ * before deciding, and otherwise sends the phone to B1.
  *
  * `HashRouter`, not `BrowserRouter`: the super app serves this from the
  * filesystem, and history routing needs a server to rewrite unknown paths.
@@ -44,14 +49,16 @@ export default function App(): JSX.Element {
   return (
     <HashRouter>
       <Routes>
-        <Route path="/" element={<Placeholder screen="B1" title="Join your vehicle" />} />
-        <Route path="/lock" element={<Placeholder screen="B2" title="Start grid" />} />
-        <Route path="/countdown" element={<Placeholder screen="B3" title="09:00 sync" />} />
-        <Route path="/route" element={<Placeholder screen="B4" title="Next leg" />} />
-        <Route path="/task/:taskId" element={<Placeholder screen="B7" title="Task" />} />
-        <Route path="/rest" element={<Placeholder screen="B8" title="Mandatory rest" />} />
-        <Route path="/arrival" element={<Placeholder screen="B9" title="Pearl Bay" />} />
-        <Route path="/report" element={<Placeholder screen="B10" title="Report an issue" />} />
+        <Route path="/" element={<InitPage />} />
+        <Route element={<RequireSession />}>
+          <Route path="/lock" element={<Placeholder screen="B2" title="Start grid" />} />
+          <Route path="/countdown" element={<Placeholder screen="B3" title="09:00 sync" />} />
+          <Route path="/route" element={<Placeholder screen="B4" title="Next leg" />} />
+          <Route path="/task/:taskId" element={<Placeholder screen="B7" title="Task" />} />
+          <Route path="/rest" element={<Placeholder screen="B8" title="Mandatory rest" />} />
+          <Route path="/arrival" element={<Placeholder screen="B9" title="Pearl Bay" />} />
+          <Route path="/report" element={<Placeholder screen="B10" title="Report an issue" />} />
+        </Route>
         {/* No 404 screen: a crew cannot type a URL, so an unknown hash is our
             own bug and the least-worst landing is the start of the flow. */}
         <Route path="*" element={<Navigate replace to="/" />} />

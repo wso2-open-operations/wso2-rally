@@ -57,3 +57,38 @@ describe("getSuperAppToken", () => {
     await expect(getSuperAppToken()).rejects.toThrow(/DEV_SUPER_APP_TOKEN/);
   });
 });
+
+describe("emailFromToken", () => {
+  /** base64url of the UTF-8 bytes — how a token issuer encodes a payload. */
+  const b64url = (value: object) =>
+    btoa(String.fromCharCode(...new TextEncoder().encode(JSON.stringify(value))))
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/, "");
+  const jwt = (claims: object) => `${b64url({ alg: "RS256" })}.${b64url(claims)}.sig`;
+
+  // Display only: the screen says who is signed in. The backend, not this,
+  // decides who the caller is.
+  it("reads the email claim to show who is signed in", async () => {
+    const { emailFromToken } = await load({ IS_MICROAPP: false });
+
+    expect(emailFromToken(jwt({ email: "nimal@wso2.com" }))).toBe("nimal@wso2.com");
+  });
+
+  it("is null for a token with no email, or one it cannot read", async () => {
+    const { emailFromToken } = await load({ IS_MICROAPP: false });
+
+    expect(emailFromToken(jwt({ sub: "x" }))).toBeNull();
+    expect(emailFromToken("not-a-jwt")).toBeNull();
+    expect(emailFromToken("a.%%%.c")).toBeNull();
+  });
+
+  // base64url, not base64 — '-' and '_' appear in real tokens — and the
+  // payload is UTF-8, so a name outside ASCII must survive the round trip.
+  it("handles base64url and UTF-8 payloads", async () => {
+    const { emailFromToken } = await load({ IS_MICROAPP: false });
+    const email = "ñandú+rally>>?@wso2.com";
+
+    expect(emailFromToken(jwt({ email }))).toBe(email);
+  });
+});
